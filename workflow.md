@@ -77,6 +77,9 @@ These don't look at pixels — they look at how a pre-trained neural network "se
 6. SSL (Self-Supervised Learning) — DINO ResNet50 — DINO is trained without labels, just by learning to make different views of the same image agree. This produces features that are less biased toward classification-relevant content and more sensitive to general visual structure.
 
 
+
+
+
 ## Hence i am build a two stage classifier
 
 Stage 1 (family classifier): spectral features + simple classifier → predicts {Real, LlamaGen-family, VAR/HMAR-family, RAR-family}. Should be very accurate.
@@ -180,7 +183,7 @@ Final output: one of 9 source labels
 ````
 
 
-
+# Current State
 # STAGE 1  - Feature Extraction Function: 
 Fingerprint F must be decoupled from the Image Content $C$ and the style $S$.
 

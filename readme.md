@@ -1,6 +1,4 @@
-# Snicket
-
-#Can you tell which AI made an image?
+# Can you tell which AI made an image?
 
 Modern autoregressive image generators produce strikingly realistic images, but each model leaves behind subtle fingerprints in its output. In this challenge, you'll build a classifier that can identify which generator produced an image — or whether it's a real image.
 
@@ -55,25 +53,11 @@ def classify_images(img_paths: List[Path]) -> List[int]:
 
 It takes image paths, returns integer labels (0–8). You're free to use any approach — train a model in the container, train externally and upload weights, or try something else entirely.
 
-## Environment
 
-The container runs Ubuntu 24.04 with Python 3.12 and the following packages pre-installed:
+---
 
-- PyTorch 2.11
-- torchvision 0.26
-- scikit-learn 1.8
-- Pillow 12.2
-- tqdm, numpy, pandas, matplotlib
+# Current State of Implementation and Next Steps: 
 
-Internet access is enabled, so you can `pip install --break-system-packages` additional packages if needed. The container has quota of 16 GiB RAM and 10 CPU cores.
-~
-~
-~
-~
-~
-~
-~
-~
-~
-README.md [RO]                                                                                                                                                                                     1,1            All
-clipboard: No provider. Try ":checkhealth" or ":h clipboard".
+
+
+
