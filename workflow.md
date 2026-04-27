@@ -42,8 +42,39 @@ features of the original image that the reconstructor struggled with (more inter
 
 but they offer further semantic invarient latent spaces: 
 
-1. For RGB -> Discrete Cosine Transformation
-2. For Grayscale -> FFT to get low frequency compoennts (but why?)
+
+Residual r
+                            │
+        ┌───────────┬───────┼───────┬───────────┬─────────┐
+        ▼           ▼       ▼       ▼           ▼         ▼
+       RGB         DCT     QFT    ResNet      ViT       DINO
+     (pixels)   (freq)  (low-f)   (SL)       (VSL)      (SSL)
+        │           │       │       │           │         │
+        └───────────┴───────┴───┬───┴───────────┴─────────┘
+                                ▼
+                     weighted fusion
+                                │
+                                ▼
+                    Causal fingerprint F_G
+
+### Pixel-level / signal-level views (3):
+
+1. RGB space — just the raw pixel values of the residual. The most direct view. Good for spotting color-channel artifacts or local pixel-level glitches.
+
+2. DCT (Discrete Cosine Transform) — converts each color channel into a frequency map. This is the same math JPEG uses. It reveals how energy is distributed across frequencies, which is useful because generators often leave characteristic patterns at certain frequencies (e.g., over-smooth high frequencies, or weird periodic textures).
+
+3. QFT (low-frequency FFT on grayscale) — convert to grayscale, apply Fast Fourier Transform, keep only the low-frequency part. This focuses on the broad structural patterns rather than fine detail. Different from DCT in that it's grayscale and emphasizes the low-frequency band specifically.
+
+
+
+### Learned / semantic views (3):
+These don't look at pixels — they look at how a pre-trained neural network "sees" the image. The intuition: a network trained on millions of images has internalized what natural images look like, so its internal representations can highlight unnatural patterns.
+
+4. SL (Supervised Learning) — ResNet101 trained on ImageNet — feed the image through a CNN classifier, grab the encoder's features. ResNets tend to capture local, texture-like patterns.
+
+5. VSL (Vision Supervised Learning) — Vision Transformer (ViT) — feed the image through a ViT, grab the "class token" feature. ViTs see images more globally (attention across patches), so this captures different structure than the CNN.
+
+6. SSL (Self-Supervised Learning) — DINO ResNet50 — DINO is trained without labels, just by learning to make different views of the same image agree. This produces features that are less biased toward classification-relevant content and more sensitive to general visual structure.
 
 
 ## Hence i am build a two stage classifier
