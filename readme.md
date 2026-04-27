@@ -57,6 +57,9 @@ It takes image paths, returns integer labels (0–8). You're free to use any app
 ---
 
 # Current State of Implementation and Next Steps: 
+## Feature Extraction Layer is currently in Implementation
+- [ ] Residuals are currently ony determined by comparsion to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
+
 
 
 
