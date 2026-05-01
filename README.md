@@ -1,6 +1,25 @@
 # Can you tell which AI made an image?
 
-Modern autoregressive image generators produce strikingly realistic images, but each model leaves behind subtle fingerprints in its output. In this challenge, you'll build a classifier that can identify which generator produced an image — or whether it's a real image.
+```
+    THE LINEUP
+    ══════════════════════════════════════════════════════════════
+
+      ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐
+      │ 📷  │    │🦙   │    │ 🎰  │    │ 🎲  │    │ 🤖  │
+      │     │    │     │    │     │    │     │    │     │
+      └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘
+         │          │          │          │          │
+       Real     LlamaGen    VAR       HMAR        RAR
+
+                    🔍
+                 ╔══════╗
+                 ║ FFT  ║  "I see your frequencies, impostor!"
+                 ╚══════╝
+
+    ══════════════════════════════════════════════════════════════
+```
+
+Modern autoregressive image generators produce strikingly realistic images, but each model leaves behind subtle fingerprints in its output. This tool identifies which generator produced an image — or whether it's real.
 
 ## Setup
 
