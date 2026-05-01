@@ -1,0 +1,422 @@
+{
+  "best": "linear_svm",
+  "per_model": {
+    "logreg": {
+      "fit_seconds": 0.12214899063110352,
+      "train": {
+        "accuracy": 0.9844444444444445,
+        "report": {
+          "Real": {
+            "precision": 0.9259259259259259,
+            "recall": 1.0,
+            "f1-score": 0.9615384615384616,
+            "support": 50.0
+          },
+          "LlamaGen": {
+            "precision": 1.0,
+            "recall": 0.98,
+            "f1-score": 0.98989898989899,
+            "support": 100.0
+          },
+          "VAR_HMAR": {
+            "precision": 1.0,
+            "recall": 0.985,
+            "f1-score": 0.9924433249370277,
+            "support": 200.0
+          },
+          "RAR": {
+            "precision": 0.9702970297029703,
+            "recall": 0.98,
+            "f1-score": 0.9751243781094527,
+            "support": 100.0
+          },
+          "accuracy": 0.9844444444444445,
+          "macro avg": {
+            "precision": 0.9740557389072241,
+            "recall": 0.98625,
+            "f1-score": 0.979751288620983,
+            "support": 450.0
+          },
+          "weighted avg": {
+            "precision": 0.9851688872590962,
+            "recall": 0.9844444444444445,
+            "f1-score": 0.9845953885892729,
+            "support": 450.0
+          }
+        },
+        "confusion": [
+          [
+            50,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            98,
+            0,
+            1
+          ],
+          [
+            1,
+            0,
+            197,
+            2
+          ],
+          [
+            2,
+            0,
+            0,
+            98
+          ]
+        ]
+      },
+      "val": {
+        "accuracy": 0.5533333333333333,
+        "report": {
+          "Real": {
+            "precision": 0.1553398058252427,
+            "recall": 0.32,
+            "f1-score": 0.20915032679738563,
+            "support": 50.0
+          },
+          "LlamaGen": {
+            "precision": 0.4105263157894737,
+            "recall": 0.39,
+            "f1-score": 0.4,
+            "support": 100.0
+          },
+          "VAR_HMAR": {
+            "precision": 0.9659863945578231,
+            "recall": 0.71,
+            "f1-score": 0.8184438040345822,
+            "support": 200.0
+          },
+          "RAR": {
+            "precision": 0.49523809523809526,
+            "recall": 0.52,
+            "f1-score": 0.5073170731707317,
+            "support": 100.0
+          },
+          "accuracy": 0.5533333333333333,
+          "macro avg": {
+            "precision": 0.5067726528526587,
+            "recall": 0.485,
+            "f1-score": 0.4837278010006749,
+            "support": 450.0
+          },
+          "weighted avg": {
+            "precision": 0.6478682451235191,
+            "recall": 0.5533333333333333,
+            "f1-score": 0.5886177432530197,
+            "support": 450.0
+          }
+        },
+        "confusion": [
+          [
+            16,
+            10,
+            1,
+            23
+          ],
+          [
+            44,
+            39,
+            1,
+            16
+          ],
+          [
+            15,
+            29,
+            142,
+            14
+          ],
+          [
+            28,
+            17,
+            3,
+            52
+          ]
+        ]
+      }
+    },
+    "linear_svm": {
+      "fit_seconds": 0.24667072296142578,
+      "train": {
+        "accuracy": 0.8577777777777778,
+        "report": {
+          "Real": {
+            "precision": 1.0,
+            "recall": 0.02,
+            "f1-score": 0.0392156862745098,
+            "support": 50.0
+          },
+          "LlamaGen": {
+            "precision": 0.8173913043478261,
+            "recall": 0.94,
+            "f1-score": 0.8744186046511628,
+            "support": 100.0
+          },
+          "VAR_HMAR": {
+            "precision": 0.9342723004694836,
+            "recall": 0.995,
+            "f1-score": 0.9636803874092009,
+            "support": 200.0
+          },
+          "RAR": {
+            "precision": 0.7603305785123967,
+            "recall": 0.92,
+            "f1-score": 0.832579185520362,
+            "support": 100.0
+          },
+          "accuracy": 0.8577777777777778,
+          "macro avg": {
+            "precision": 0.8779985458324266,
+            "recall": 0.71875,
+            "f1-score": 0.6774734659638089,
+            "support": 450.0
+          },
+          "weighted avg": {
+            "precision": 0.8769481075109311,
+            "recall": 0.8577777777777778,
+            "f1-score": 0.8119925351393736,
+            "support": 450.0
+          }
+        },
+        "confusion": [
+          [
+            1,
+            17,
+            7,
+            25
+          ],
+          [
+            0,
+            94,
+            3,
+            3
+          ],
+          [
+            0,
+            0,
+            199,
+            1
+          ],
+          [
+            0,
+            4,
+            4,
+            92
+          ]
+        ]
+      },
+      "val": {
+        "accuracy": 0.6488888888888888,
+        "report": {
+          "Real": {
+            "precision": 0.5,
+            "recall": 0.06,
+            "f1-score": 0.10714285714285714,
+            "support": 50.0
+          },
+          "LlamaGen": {
+            "precision": 0.49606299212598426,
+            "recall": 0.63,
+            "f1-score": 0.5550660792951542,
+            "support": 100.0
+          },
+          "VAR_HMAR": {
+            "precision": 0.9166666666666666,
+            "recall": 0.77,
+            "f1-score": 0.8369565217391305,
+            "support": 200.0
+          },
+          "RAR": {
+            "precision": 0.48322147651006714,
+            "recall": 0.72,
+            "f1-score": 0.5783132530120482,
+            "support": 100.0
+          },
+          "accuracy": 0.6488888888888888,
+          "macro avg": {
+            "precision": 0.5989877838256795,
+            "recall": 0.5449999999999999,
+            "f1-score": 0.5193696777972975,
+            "support": 450.0
+          },
+          "weighted avg": {
+            "precision": 0.6805817337709744,
+            "recall": 0.6488888888888888,
+            "f1-score": 0.6357475120793094,
+            "support": 450.0
+          }
+        },
+        "confusion": [
+          [
+            3,
+            12,
+            6,
+            29
+          ],
+          [
+            2,
+            63,
+            5,
+            30
+          ],
+          [
+            1,
+            27,
+            154,
+            18
+          ],
+          [
+            0,
+            25,
+            3,
+            72
+          ]
+        ]
+      }
+    },
+    "hgb": {
+      "fit_seconds": 7.651787996292114,
+      "train": {
+        "accuracy": 1.0,
+        "report": {
+          "Real": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1-score": 1.0,
+            "support": 50.0
+          },
+          "LlamaGen": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1-score": 1.0,
+            "support": 100.0
+          },
+          "VAR_HMAR": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1-score": 1.0,
+            "support": 200.0
+          },
+          "RAR": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1-score": 1.0,
+            "support": 100.0
+          },
+          "accuracy": 1.0,
+          "macro avg": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1-score": 1.0,
+            "support": 450.0
+          },
+          "weighted avg": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1-score": 1.0,
+            "support": 450.0
+          }
+        },
+        "confusion": [
+          [
+            50,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            100,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            200,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            100
+          ]
+        ]
+      },
+      "val": {
+        "accuracy": 0.64,
+        "report": {
+          "Real": {
+            "precision": 0.22448979591836735,
+            "recall": 0.22,
+            "f1-score": 0.2222222222222222,
+            "support": 50.0
+          },
+          "LlamaGen": {
+            "precision": 0.5287356321839081,
+            "recall": 0.46,
+            "f1-score": 0.4919786096256685,
+            "support": 100.0
+          },
+          "VAR_HMAR": {
+            "precision": 0.8571428571428571,
+            "recall": 0.81,
+            "f1-score": 0.8329048843187661,
+            "support": 200.0
+          },
+          "RAR": {
+            "precision": 0.552,
+            "recall": 0.69,
+            "f1-score": 0.6133333333333333,
+            "support": 100.0
+          },
+          "accuracy": 0.64,
+          "macro avg": {
+            "precision": 0.5405920713112832,
+            "recall": 0.545,
+            "f1-score": 0.5401097623749975,
+            "support": 450.0
+          },
+          "weighted avg": {
+            "precision": 0.6460591654286235,
+            "recall": 0.64,
+            "f1-score": 0.6404961828239212,
+            "support": 450.0
+          }
+        },
+        "confusion": [
+          [
+            11,
+            5,
+            5,
+            29
+          ],
+          [
+            18,
+            46,
+            18,
+            18
+          ],
+          [
+            4,
+            25,
+            162,
+            9
+          ],
+          [
+            16,
+            11,
+            4,
+            69
+          ]
+        ]
+      }
+    }
+  }
+}
