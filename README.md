@@ -51,7 +51,7 @@ ssh -p 2222 <challenge>@<Server URL> 'for dir in /home/user/data/*/*/ /home/user
 
 
 ## How to use
-Technical details can be found in the [Manual](src/Readme.md).
+Technical details can be found in the [Manual](src/README.md).
 
 
 It takes image paths, returns integer labels (0–8). You're free to use any approach — train a model in the container, train externally and upload weights, or try something else entirely.
