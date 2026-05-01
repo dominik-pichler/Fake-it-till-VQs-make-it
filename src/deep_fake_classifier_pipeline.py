@@ -119,34 +119,6 @@ def classify_images(
     return [int(p) for p in predictions]
 
 
-
-"""
-End-to-end pipeline for AR-image attribution.
-
-Usage
------
-1. Extract features from train+val (cached to disk):
-
-       python pipeline.py extract --data-root data --out features/
-
-2. Train all three classifiers, pick best on val/:
-
-       python pipeline.py train --features features/ --out models/
-
-3. Predict on the test set:
-
-       python pipeline.py predict --features features/ --model models/best.joblib \
-                                  --data-root data --out submission.csv
-
-The 4-way label space is:
-    0 = Real
-    1 = LlamaGen        (llamagen_B_VQ-16, llamagen_L_VQ-16)
-    2 = VAR/HMAR        (hmar_d20, hmar_d30, nspvar_20, nspvar_30)
-    3 = RAR             (rar_l, rar_xxl)
-"""
-
-
-
 # ---------------------------------------------------------------------------
 # Label / folder mapping
 # ---------------------------------------------------------------------------
@@ -234,7 +206,7 @@ def extract_split(
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: extract
+# Subcommand: extract -> This runs the feature extraction!
 # ---------------------------------------------------------------------------
 
 def cmd_extract(args: argparse.Namespace) -> None:

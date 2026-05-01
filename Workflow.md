@@ -55,7 +55,7 @@ Residual r
         │           │       │       │           │         │
         └───────────┴───────┴───┬───┴───────────┴─────────┘
                                 ▼
-                     weighted fusion
+                     weighted fusion (TBD - currently not here) 
                                 │
                                 ▼
                     Causal fingerprint F_G
@@ -82,9 +82,9 @@ These don't look at pixels — they look at how a pre-trained neural network "se
 
 
 
+![alt text](imgs/CF_Architecture.png)
 
-
-## Hence i am build a two stage classifier
+## Hence I am build a two stage classifier
 
 Stage 1 (family classifier): spectral features + simple classifier → predicts {Real, LlamaGen-family, VAR/HMAR-family, RAR-family}. Should be very accurate.
 

@@ -43,6 +43,16 @@ data/
     ├── ...
 ```
 
+For local tests, a reduced set can be extracted via: 
+
+```
+ssh -p 2222 <challenge>@<Server URL> 'for dir in /home/user/data/*/*/ /home/user/data/test/; do ls "$dir"*.png 2>/dev/null | head -50; done' | \
+```
+
+
+## How to use
+Technical details can be found in the [Manual](src/Readme.md).
+
 ## What to Do
 
 Edit `solution.py` and implement:

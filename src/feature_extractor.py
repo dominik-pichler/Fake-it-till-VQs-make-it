@@ -117,7 +117,6 @@ def _compute_residual(rgb: np.ndarray, sigma: float) -> np.ndarray:
         res[..., c] = rgb[..., c] - ndimage.gaussian_filter(rgb[..., c], sigma=sigma)
     return res
 
-
 # ---------------------------------------------------------------------------
 # Lens 1: RGB space
 # ---------------------------------------------------------------------------
@@ -168,7 +167,6 @@ def palette_ratio(rgb: np.ndarray) -> np.ndarray:
 def _dct2(channel: np.ndarray) -> np.ndarray:
     """2D DCT-II with orthonormal normalisation."""
     return dct(dct(channel, axis=0, norm="ortho"), axis=1, norm="ortho")
-
 
 def dct_lens_features(
     residual_rgb: np.ndarray,
@@ -350,6 +348,7 @@ class Stage1FeatureExtractor:
 
     def _populate_names(self) -> None:
         c = self.cfg
+
         if c.use_rgb_lens:
             for tag in ("mean", "std", "skew", "kurt", "energy", "grad"):
                 self._names.append(f"rgb_gray_{tag}")
