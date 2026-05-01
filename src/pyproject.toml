@@ -1,0 +1,12 @@
+[project]
+name = "deepfake-classifier"
+version = "0.1.0"
+description = "AR-image attribution pipeline with feature extraction and classification"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+    "scipy>=1.11.0",
+    "scikit-learn>=1.3.0",
+    "joblib>=1.3.0",
+]

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
+from typing import List
 
 import numpy as np
 from joblib import dump, load
@@ -17,7 +19,104 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 
-from stage1_extractor import FeatureConfig, Stage1FeatureExtractor
+from feature_extractor import FeatureConfig, Stage1FeatureExtractor
+
+
+# ---------------------------------------------------------------------------
+# Default model path (can be overridden via env var or function parameter)
+# ---------------------------------------------------------------------------
+
+DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best.joblib"
+
+
+# ---------------------------------------------------------------------------
+# Classifier singleton for efficient repeated calls
+# ---------------------------------------------------------------------------
+
+class _ClassifierSingleton:
+    """Lazy-loaded classifier to avoid reloading model on each call."""
+
+    _instance: "_ClassifierSingleton | None" = None
+    _model: Pipeline | None = None
+    _extractor: Stage1FeatureExtractor | None = None
+    _model_path: Path | None = None
+
+    @classmethod
+    def get(cls, model_path: Path | None = None) -> "_ClassifierSingleton":
+        if cls._instance is None:
+            cls._instance = cls()
+
+        # Reload if different model path requested
+        resolved_path = cls._resolve_model_path(model_path)
+        if cls._instance._model_path != resolved_path:
+            cls._instance._load(resolved_path)
+
+        return cls._instance
+
+    @staticmethod
+    def _resolve_model_path(model_path: Path | None) -> Path:
+        if model_path is not None:
+            return Path(model_path)
+        env_path = os.environ.get("DEEPFAKE_MODEL_PATH")
+        if env_path:
+            return Path(env_path)
+        return DEFAULT_MODEL_PATH
+
+    def _load(self, model_path: Path) -> None:
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"Model not found at {model_path}. "
+                f"Train a model first with: python deep_fake_classifier_pipeline.py train ..."
+            )
+        self._model = load(model_path)
+        self._extractor = Stage1FeatureExtractor(FeatureConfig())
+        self._model_path = model_path
+
+    @property
+    def model(self) -> Pipeline:
+        if self._model is None:
+            raise RuntimeError("Classifier not loaded")
+        return self._model
+
+    @property
+    def extractor(self) -> Stage1FeatureExtractor:
+        if self._extractor is None:
+            raise RuntimeError("Extractor not loaded")
+        return self._extractor
+
+
+# ---------------------------------------------------------------------------
+# Public API: classify_images
+# ---------------------------------------------------------------------------
+
+def classify_images(
+    img_paths: List[Path],
+    model_path: Path | None = None,
+) -> List[int]:
+    """
+    Classify a list of images and return predicted class labels.
+
+    Args:
+        img_paths: List of paths to image files (PNG, JPG, etc.)
+        model_path: Optional path to trained model (.joblib file).
+                    If not provided, uses DEEPFAKE_MODEL_PATH env var
+                    or falls back to models/best.joblib
+
+    Returns:
+        List of predicted class labels (0=Real, 1=LlamaGen, 2=VAR_HMAR, 3=RAR)
+    """
+    if not img_paths:
+        return []
+
+    classifier = _ClassifierSingleton.get(model_path)
+
+    # Extract features for all images
+    features = classifier.extractor.extract_batch([str(p) for p in img_paths])
+
+    # Predict
+    predictions = classifier.model.predict(features)
+
+    return [int(p) for p in predictions]
 
 
 
