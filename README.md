@@ -2,9 +2,10 @@
 
 Modern autoregressive image generators produce strikingly realistic images, but each model leaves behind subtle fingerprints in its output. In this challenge, you'll build a classifier that can identify which generator produced an image — or whether it's a real image.
 
-## The Challenge
+## Setup
 
-You're given images from 9 sources — 8 different autoregressive generators and real ImageNet photos. Your job is to figure out which generative model made what.
+Images from 9 sources — 8 different autoregressive generators and real ImageNet photos. 
+The purpose of this repo is to provie a tool that to figure out which generative model made what.
 
 | Label | Source |
 |-------|--------|
@@ -18,7 +19,6 @@ You're given images from 9 sources — 8 different autoregressive generators and
 | 7 | RAR-L |
 | 8 | RAR-XXL |
 
-Your classifier is evaluated by accuracy on the test data.
 
 ## Data
 
@@ -53,13 +53,6 @@ ssh -p 2222 <challenge>@<Server URL> 'for dir in /home/user/data/*/*/ /home/user
 ## How to use
 Technical details can be found in the [Manual](src/Readme.md).
 
-## What to Do
-
-Edit `solution.py` and implement:
-
-```python
-def classify_images(img_paths: List[Path]) -> List[int]:
-```
 
 It takes image paths, returns integer labels (0–8). You're free to use any approach — train a model in the container, train externally and upload weights, or try something else entirely.
 
@@ -67,9 +60,7 @@ It takes image paths, returns integer labels (0–8). You're free to use any app
 ---
 
 # Current State of Implementation and Next Steps: 
-## Releases
-- v1.0 - Extract
-
+Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
 - [ ] Residuals are currently ony determined by comparsion to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
 - [ ] Classifiers are currently only Logistic Regression, Linear SVM , HistGradientBoosting yet, using CNNs seem more promising
