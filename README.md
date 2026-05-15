@@ -64,10 +64,18 @@ data/
 
 For local tests, a reduced set can be extracted via: 
 
-```
+```shell
 ssh -p 2222 <challenge>@<Server URL> 'for dir in /home/user/data/*/*/ /home/user/data/test/; do ls "$dir"*.png 2>/dev/null | head -50; done' | \
 ```
 
+
+
+## How to deploy to remote ssh
+
+```shell
+scp -P 2222 /path/to/local/file <challenge>@<Server URL>:/path/on/server/
+
+```
 
 ## How to use
 
