@@ -2,7 +2,7 @@
   "best": "linear_svm",
   "per_model": {
     "logreg": {
-      "fit_seconds": 0.12214899063110352,
+      "fit_seconds": 0.13161611557006836,
       "train": {
         "accuracy": 0.9844444444444445,
         "report": {
@@ -141,7 +141,7 @@
       }
     },
     "linear_svm": {
-      "fit_seconds": 0.24667072296142578,
+      "fit_seconds": 0.2493131160736084,
       "train": {
         "accuracy": 0.8577777777777778,
         "report": {
@@ -280,7 +280,7 @@
       }
     },
     "hgb": {
-      "fit_seconds": 7.651787996292114,
+      "fit_seconds": 6.93124794960022,
       "train": {
         "accuracy": 1.0,
         "report": {
