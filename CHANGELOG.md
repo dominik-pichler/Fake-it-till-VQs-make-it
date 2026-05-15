@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v1.1.0] - 2026-05-15
+
+### Added
+- Comprehensive `WORKFLOW.md` documentation covering:
+  - Detailed explanation of autoregressive image generation process
+  - Theoretical background on Causal Fingerprints (Xu et al.)
+  - Two-stage classification architecture design
+  - Feature extraction approach with all 6 lenses documented
+- Architecture diagrams (`CF_Architecture.png`, `Causal_Fingerprint_Architecture.png`)
+- ASCII art banner in README for visual project identification
+- `.gitignore` for proper version control hygiene
+
+### Changed
+- README restructured with clearer setup and usage sections
+- Documentation now references CHANGELOG for implementation status
+- Expanded lens documentation: 3 signal-level lenses (RGB, DCT, QFT) implemented, 3 semantic lenses (SL, VSL, SSL) planned
+
+### Documentation
+- Added detailed explanations of tokenizer families (HMAR, LlamaGen, VAR, RAR)
+- Documented Semantic-Invariant Latent Spaces (SILS) approach
+- Added visual diagrams for two-stage classification pipeline
+
 ## [v1.0.0_one_layer_extractor] - 2026-05-01
 
 ### Added

@@ -81,6 +81,9 @@ It takes image paths, returns integer labels (0–8). You're free to use any app
 # Current State of Implementation and Next Steps: 
 Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
+- 6 Standard Lenses are implemented 
+- Residuals are determined via Gaussian
+
 - [ ] Residuals are currently ony determined by comparsion to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
 - [ ] Classifiers are currently only Logistic Regression, Linear SVM , HistGradientBoosting yet, using CNNs seem more promising
   - Could happen via: Encoder: maps 128-dim fingerprint → parameters (μ, σ) of a 64-dim Gaussian
