@@ -70,6 +70,13 @@ ssh -p 2222 <challenge>@<Server URL> 'for dir in /home/user/data/*/*/ /home/user
 
 
 ## How to use
+
+If you are just interested in running the classifier, run: 
+`uv run solution.py </path/to/pngs> --model ./<my_model.joblib>`
+
+To run the standard pipeline:  
+`uv run solution.py data/test/ --model models/best.joblib`
+
 Technical details can be found in the [Manual](src/README.md).
 
 
