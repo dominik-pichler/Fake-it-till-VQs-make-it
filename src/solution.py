@@ -5,7 +5,7 @@ import sys
 import joblib
 import numpy as np
 
-from spectral_extractor import SpectralFeatureExtractor
+from extractor_factory import build_extractor
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +97,14 @@ def predict_fine_hard(bundle: dict, X: np.ndarray) -> np.ndarray:
 # Feature extractor singleton
 # ---------------------------------------------------------------------------
 
-_extractor: SpectralFeatureExtractor | None = None
+_extractor = None
 
 
-def get_extractor() -> SpectralFeatureExtractor:
+def get_extractor():
+    """Return the extractor selected by extractor_config.yaml (cached)."""
     global _extractor
     if _extractor is None:
-        _extractor = SpectralFeatureExtractor()
+        _extractor = build_extractor()
     return _extractor
 
 

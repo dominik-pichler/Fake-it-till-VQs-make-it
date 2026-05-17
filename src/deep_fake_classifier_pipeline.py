@@ -18,7 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 
-from spectral_extractor import FeatureConfig, SpectralFeatureExtractor
+from extractor_factory import build_extractor
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ class _ClassifierSingleton:
 
     _instance: "_ClassifierSingleton | None" = None
     _model: object | None = None         # Pipeline OR bundle dict
-    _extractor: SpectralFeatureExtractor | None = None
+    _extractor: object | None = None     # extractor type chosen by YAML config
     _model_path: Path | None = None
     _is_hierarchical: bool = False
 
@@ -125,7 +125,7 @@ class _ClassifierSingleton:
         # A bundle is a dict with "stage1" key; a flat model is a Pipeline.
         self._is_hierarchical = isinstance(obj, dict) and "stage1" in obj
         self._model = obj
-        self._extractor = SpectralFeatureExtractor(FeatureConfig())
+        self._extractor = build_extractor()
         self._model_path = model_path
 
     @property
@@ -139,7 +139,7 @@ class _ClassifierSingleton:
         return self._is_hierarchical
 
     @property
-    def extractor(self) -> SpectralFeatureExtractor:
+    def extractor(self):
         if self._extractor is None:
             raise RuntimeError("Extractor not loaded")
         return self._extractor
@@ -217,7 +217,7 @@ def collect_test(test_dir: Path) -> list[Path]:
 
 def extract_split(
     paths: list[Path],
-    extractor: SpectralFeatureExtractor,
+    extractor,
     cache_path: Path,
     log_every: int = 500,
 ) -> np.ndarray:
@@ -257,8 +257,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    extractor = SpectralFeatureExtractor(FeatureConfig())
-    print(f"Extractor: {extractor.n_features} features")
+    extractor = build_extractor()
+    print(f"Extractor: {type(extractor).__name__} with {extractor.n_features} features")
 
     # Save metadata once for later inspection
     (out_dir / "feature_names.json").write_text(

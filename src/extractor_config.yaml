@@ -1,0 +1,35 @@
+# Which feature extractor to use.
+# One of: spectral, multi_encoder, combined
+extractor: spectral
+
+# --- Per-extractor settings ---
+# Only the section matching `extractor` above is consumed. Keys map
+# directly to FeatureConfig / MultiEncoderConfig fields; omit any key
+# to fall back to the dataclass default.
+
+spectral:
+  image_size: 256
+  grid_sizes: [8, 10, 13, 16]
+  peak_bin_radius: 1
+  n_radial_bins: 32
+  qft_low_freq_fraction: 0.25
+  residual_sigma: 1.0
+  use_rgb_lens: true
+  use_dct_lens: true
+  use_qft_lens: true
+
+multi_encoder:
+  image_size: 256
+  embed_dim: 512
+  use_sl: true            # ResNet101 (ImageNet supervised)
+  use_vsl: true           # ViT-B/16 (ImageNet supervised)
+  use_ssl: true           # DINO ResNet50 (self-supervised)
+  freeze_backbones: true
+  device: cpu             # cpu | cuda | cuda:0 | ...
+
+combined:
+  device: cpu
+  # Override individual spectral / multi_encoder fields here if needed;
+  # leave the sub-blocks empty to use the dataclass defaults.
+  spectral: {}
+  multi_encoder: {}
