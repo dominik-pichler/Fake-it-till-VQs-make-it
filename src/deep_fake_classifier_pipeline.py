@@ -212,6 +212,23 @@ def collect_test(test_dir: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Per-extractor feature directory scoping
+# ---------------------------------------------------------------------------
+
+def _extractor_kind() -> str:
+    """Active extractor kind from the YAML config (e.g. 'spectral')."""
+    from extractor_factory import load_config
+    return str(load_config().get("extractor", "spectral"))
+
+
+def scoped_feature_dir(base: Path | str) -> Path:
+    """Return <base>/<extractor_kind> so each extractor caches into its own
+    subdirectory. The directory is NOT created here -- callers do that.
+    """
+    return Path(base) / _extractor_kind()
+
+
+# ---------------------------------------------------------------------------
 # Feature extraction with disk cache
 # ---------------------------------------------------------------------------
 
@@ -254,11 +271,12 @@ def extract_split(
 
 def cmd_extract(args: argparse.Namespace) -> None:
     data_root = Path(args.data_root)
-    out_dir = Path(args.out)
+    out_dir = scoped_feature_dir(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     extractor = build_extractor()
     print(f"Extractor: {type(extractor).__name__} with {extractor.n_features} features")
+    print(f"Feature cache: {out_dir}")
 
     # Save metadata once for later inspection
     (out_dir / "feature_names.json").write_text(
@@ -524,9 +542,10 @@ def predict_fine_hard(
 # ---------------------------------------------------------------------------
 
 def cmd_train(args: argparse.Namespace) -> None:
-    feat_dir = Path(args.features)
+    feat_dir = scoped_feature_dir(args.features)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Feature cache: {feat_dir}")
 
     X_tr = np.load(feat_dir / "train_X.npy")
     y_fine_tr = np.load(feat_dir / "train_y.npy")
@@ -657,7 +676,8 @@ def _json_default(o):
 # ---------------------------------------------------------------------------
 
 def cmd_predict(args: argparse.Namespace) -> None:
-    feat_dir = Path(args.features)
+    feat_dir = scoped_feature_dir(args.features)
+    print(f"Feature cache: {feat_dir}")
     test_X = np.load(feat_dir / "test_X.npy")
     test_paths = json.loads((feat_dir / "test_paths.json").read_text())
     print(f"test: {test_X.shape}")
@@ -753,12 +773,18 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("extract", help="Extract and cache features for all splits")
     e.add_argument("--data-root", required=True,
                    help="Root with train/, val/, test/ subdirs")
-    e.add_argument("--out", required=True, help="Where to write *_X.npy etc.")
+    e.add_argument("--out", required=True,
+                   help="Base feature cache dir; the active extractor kind "
+                        "(from extractor_config.yaml) is appended automatically, "
+                        "e.g. --out features -> features/spectral/")
     e.set_defaults(func=cmd_extract)
 
     t = sub.add_parser("train", help="Train all three stage-1 candidates, "
                                      "pick best on val, optionally train stage-2 heads")
-    t.add_argument("--features", required=True, help="Feature cache directory")
+    t.add_argument("--features", required=True,
+                   help="Base feature cache dir; the active extractor kind is "
+                        "appended automatically (must match the kind used at "
+                        "extract time).")
     t.add_argument("--out", required=True, help="Where to write *.joblib + results.json")
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--hierarchical", action="store_true",
@@ -767,7 +793,9 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(func=cmd_train)
 
     pr = sub.add_parser("predict", help="Predict on the test set")
-    pr.add_argument("--features", required=True)
+    pr.add_argument("--features", required=True,
+                    help="Base feature cache dir; the active extractor kind is "
+                         "appended automatically.")
     pr.add_argument("--model", required=True,
                     help="Path to best.joblib or hierarchical.joblib "
                          "(auto-detected).")
