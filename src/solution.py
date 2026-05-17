@@ -5,7 +5,7 @@ import sys
 import joblib
 import numpy as np
 
-from feature_extractor import Stage1FeatureExtractor
+from spectral_extractor import SpectralFeatureExtractor
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +97,13 @@ def predict_fine_hard(bundle: dict, X: np.ndarray) -> np.ndarray:
 # Feature extractor singleton
 # ---------------------------------------------------------------------------
 
-_extractor: Stage1FeatureExtractor | None = None
+_extractor: SpectralFeatureExtractor | None = None
 
 
-def get_extractor() -> Stage1FeatureExtractor:
+def get_extractor() -> SpectralFeatureExtractor:
     global _extractor
     if _extractor is None:
-        _extractor = Stage1FeatureExtractor()
+        _extractor = SpectralFeatureExtractor()
     return _extractor
 
 
