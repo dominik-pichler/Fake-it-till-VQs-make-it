@@ -2,9 +2,11 @@
 Factory: build a feature extractor from a YAML config.
 
 The YAML's top-level `extractor:` key picks one of:
-  - spectral       -> SpectralFeatureExtractor
-  - multi_encoder  -> MultiEncoderExtractor
-  - combined       -> CombinedFeatureExtractor
+  - spectral            -> SpectralFeatureExtractor
+  - forensic            -> ForensicFeatureExtractor   (SRM + wavelet + LBP)
+  - spectral_forensic   -> SpectralForensicExtractor  (spectral + forensic; pure numpy)
+  - multi_encoder       -> MultiEncoderExtractor
+  - combined            -> CombinedFeatureExtractor   (spectral + multi_encoder)
 
 The matching section provides constructor kwargs. See extractor_config.yaml
 for the shape of each section.
@@ -57,6 +59,23 @@ def build_extractor(config: dict[str, Any] | Path | str | None = None):
         section = config.get("spectral") or {}
         return SpectralFeatureExtractor(FeatureConfig(**section))
 
+    if kind == "forensic":
+        from forensic_extractor import ForensicConfig, ForensicFeatureExtractor
+        section = config.get("forensic") or {}
+        return ForensicFeatureExtractor(ForensicConfig(**section))
+
+    if kind == "spectral_forensic":
+        from spectral_extractor import FeatureConfig
+        from forensic_extractor import ForensicConfig
+        from spectral_forensic_extractor import SpectralForensicExtractor
+        section = config.get("spectral_forensic") or {}
+        spec_kwargs = section.get("spectral") or {}
+        forn_kwargs = section.get("forensic") or {}
+        return SpectralForensicExtractor(
+            spectral_config=FeatureConfig(**spec_kwargs),
+            forensic_config=ForensicConfig(**forn_kwargs),
+        )
+
     if kind == "multi_encoder":
         from multi_encoder_extractor import MultiEncoderConfig, MultiEncoderExtractor
         section = dict(config.get("multi_encoder") or {})
@@ -78,6 +97,6 @@ def build_extractor(config: dict[str, Any] | Path | str | None = None):
         )
 
     raise ValueError(
-        f"Unknown extractor type: {kind!r}. "
-        f"Expected one of: spectral, multi_encoder, combined."
+        f"Unknown extractor type: {kind!r}. Expected one of: "
+        f"spectral, forensic, spectral_forensic, multi_encoder, combined."
     )

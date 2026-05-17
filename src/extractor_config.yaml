@@ -1,6 +1,6 @@
 # Which feature extractor to use.
-# One of: spectral, multi_encoder, combined
-extractor: spectral
+# One of: spectral, forensic, spectral_forensic, multi_encoder, combined
+extractor: forensic
 
 # --- Per-extractor settings ---
 # Only the section matching `extractor` above is consumed. Keys map
@@ -17,6 +17,25 @@ spectral:
   use_rgb_lens: true
   use_dct_lens: true
   use_qft_lens: true
+
+forensic:
+  image_size: 256
+  # SRM (Steganalysis Rich Model) residual moments
+  use_srm: true
+  srm_truncate: 2.0
+  # Haar 2D wavelet sub-band moments (numpy-native; no pywavelets dep)
+  use_wavelet: true
+  wavelet_levels: 3
+  # Bit-count LBP histograms (numpy-native; no scikit-image dep)
+  # 9 bins per radius (count of brighter neighbours, 0..8).
+  use_lbp: true
+  lbp_radii: [1, 2]
+
+spectral_forensic:
+  # Override individual spectral / forensic fields here; leave the sub-blocks
+  # empty to use the dataclass defaults from each extractor.
+  spectral: {}
+  forensic: {}
 
 multi_encoder:
   image_size: 256
