@@ -77,6 +77,15 @@ scp -P 2222 /path/to/local/file <challenge>@<Server URL>:/path/on/server/
 
 ```
 
+If you dont need to copy everything, you can use: 
+```shell
+rsync -av -e "ssh -p 2222" \
+  --exclude="features/" \
+  --exclude="data/" \
+  --exclude=".venv/" \
+  /path/to/local/test/project/src/ <challenge>@<Server URL>:/path/on/server/
+```
+
 ## How to use
 
 If you are just interested in running the classifier, run: 
@@ -96,12 +105,12 @@ It takes image paths, returns integer labels (0–8). You're free to use any app
 # Current State of Implementation and Next Steps: 
 Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
-- 6 Standard Lenses are implemented 
-- Residuals are determined via Gaussian
-
-- [ ] Residuals are currently ony determined by comparsion to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
+- [ ] Residuals are currently ony determined by comparison to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
+- [ ] Intra-Family Classifier is still not performing well - this needs to be improved 
 - [ ] Classifiers are currently only Logistic Regression, Linear SVM , HistGradientBoosting yet, using CNNs seem more promising
-  - Could happen via: Encoder: maps 128-dim fingerprint → parameters (μ, σ) of a 64-dim Gaussian
+      Could happen via: Encoder: maps 128-dim fingerprint → parameters (μ, σ) of a 64-dim Gaussian
+- [ ] ~~Currently only spectral Extractor is used - but does already deliver solid results in the familiy classfication. In the next step the encoder extractor + a combination of both should also be tested and evaluated~~
+- [ ] ~~Second Stage Classifier has only model type (Logistic Regression: end-to-end fine val acc (hard routing): 0.3763) -> This should be extended to three just as in step 1~~
 
 
 

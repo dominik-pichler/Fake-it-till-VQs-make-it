@@ -212,6 +212,23 @@ def collect_test(test_dir: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Per-extractor feature directory scoping
+# ---------------------------------------------------------------------------
+
+def _extractor_kind() -> str:
+    """Active extractor kind from the YAML config (e.g. 'spectral')."""
+    from extractor_factory import load_config
+    return str(load_config().get("extractor", "spectral"))
+
+
+def scoped_feature_dir(base: Path | str) -> Path:
+    """Return <base>/<extractor_kind> so each extractor caches into its own
+    subdirectory. The directory is NOT created here -- callers do that.
+    """
+    return Path(base) / _extractor_kind()
+
+
+# ---------------------------------------------------------------------------
 # Feature extraction with disk cache
 # ---------------------------------------------------------------------------
 
@@ -254,11 +271,12 @@ def extract_split(
 
 def cmd_extract(args: argparse.Namespace) -> None:
     data_root = Path(args.data_root)
-    out_dir = Path(args.out)
+    out_dir = scoped_feature_dir(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     extractor = build_extractor()
     print(f"Extractor: {type(extractor).__name__} with {extractor.n_features} features")
+    print(f"Feature cache: {out_dir}")
 
     # Save metadata once for later inspection
     (out_dir / "feature_names.json").write_text(
@@ -331,21 +349,13 @@ def build_classifiers(random_state: int = 0) -> dict[str, Pipeline]:
     }
 
 
-def build_stage2_head(random_state: int = 0) -> Pipeline:
-    """A small head for within-family disambiguation.
+def build_stage2_candidates(random_state: int = 0) -> dict[str, Pipeline]:
+    """Candidate heads for within-family disambiguation.
 
-    Logistic regression is fast, stable on small subsets, and gives well-
-    behaved probabilities. Same scaler front-end as stage-1 for consistency.
+    Mirrors build_classifiers() so each family can pick the head that fits
+    its (typically smaller, harder) subset best on val.
     """
-    return Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(
-            max_iter=2000,
-            class_weight="balanced",
-            C=1.0,
-            random_state=random_state,
-        )),
-    ])
+    return build_classifiers(random_state=random_state)
 
 
 def evaluate(pipe: Pipeline, X: np.ndarray, y: np.ndarray,
@@ -420,34 +430,59 @@ def train_stage2_heads(
             }
             continue
 
-        head = build_stage2_head(random_state=random_state)
-        t0 = time.time()
-        head.fit(Xf_tr, yf_tr)
-        fit_dt = time.time() - t0
+        candidates = build_stage2_candidates(random_state=random_state)
+        per_candidate: dict[str, dict] = {}
+        best_name: str | None = None
+        best_score: float = -1.0
+        best_pipe: Pipeline | None = None
+        selection_basis = "val" if mask_va.sum() > 0 else "train"
 
-        tr_eval = evaluate(head, Xf_tr, yf_tr, FINE_NAMES)
-        va_eval = evaluate(head, Xf_va, yf_va, FINE_NAMES) if mask_va.sum() > 0 else None
-        va_acc_str = f"{va_eval['accuracy']:.4f}" if va_eval else "n/a (no val data)"
-        print(f"    fit: {fit_dt:.1f}s  train acc={tr_eval['accuracy']:.4f}  "
-              f"val acc={va_acc_str}")
-        if va_eval:
-            for cls_idx in fine_members:
-                cls_name = FINE_NAMES[cls_idx]
-                m = va_eval["report"].get(cls_name)
-                if m:
-                    print(f"      {cls_name:12s} "
-                          f"P={m['precision']:.3f} R={m['recall']:.3f} "
-                          f"F1={m['f1-score']:.3f}")
+        for cand_name, pipe in candidates.items():
+            t0 = time.time()
+            pipe.fit(Xf_tr, yf_tr)
+            fit_dt = time.time() - t0
 
-        heads[coarse_idx] = head
+            tr_eval = evaluate(pipe, Xf_tr, yf_tr, FINE_NAMES)
+            va_eval = (evaluate(pipe, Xf_va, yf_va, FINE_NAMES)
+                       if mask_va.sum() > 0 else None)
+            score = va_eval["accuracy"] if va_eval else tr_eval["accuracy"]
+            va_acc_str = f"{va_eval['accuracy']:.4f}" if va_eval else "n/a"
+
+            print(f"    [{cand_name:10s}] fit: {fit_dt:.1f}s  "
+                  f"train acc={tr_eval['accuracy']:.4f}  val acc={va_acc_str}")
+            if va_eval:
+                for cls_idx in fine_members:
+                    cls_name = FINE_NAMES[cls_idx]
+                    m = va_eval["report"].get(cls_name)
+                    if m:
+                        print(f"        {cls_name:12s} "
+                              f"P={m['precision']:.3f} R={m['recall']:.3f} "
+                              f"F1={m['f1-score']:.3f}")
+
+            per_candidate[cand_name] = {
+                "fit_seconds": fit_dt,
+                "train": tr_eval,
+                "val": va_eval,
+            }
+            if score > best_score:
+                best_score = score
+                best_name = cand_name
+                best_pipe = pipe
+
+        assert best_pipe is not None and best_name is not None
+        print(f"    >>> best for {family_name}: {best_name} "
+              f"({selection_basis} acc={best_score:.4f})")
+
+        heads[coarse_idx] = best_pipe
         head_results[coarse_idx] = {
             "family_name": family_name,
             "fine_members": fine_members,
             "n_train": int(mask_tr.sum()),
             "n_val": int(mask_va.sum()),
-            "fit_seconds": fit_dt,
-            "train": tr_eval,
-            "val": va_eval,
+            "best_candidate": best_name,
+            "selection_basis": selection_basis,
+            "selection_score": best_score,
+            "per_candidate": per_candidate,
         }
 
     return heads, head_results
@@ -507,9 +542,10 @@ def predict_fine_hard(
 # ---------------------------------------------------------------------------
 
 def cmd_train(args: argparse.Namespace) -> None:
-    feat_dir = Path(args.features)
+    feat_dir = scoped_feature_dir(args.features)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Feature cache: {feat_dir}")
 
     X_tr = np.load(feat_dir / "train_X.npy")
     y_fine_tr = np.load(feat_dir / "train_y.npy")
@@ -640,7 +676,8 @@ def _json_default(o):
 # ---------------------------------------------------------------------------
 
 def cmd_predict(args: argparse.Namespace) -> None:
-    feat_dir = Path(args.features)
+    feat_dir = scoped_feature_dir(args.features)
+    print(f"Feature cache: {feat_dir}")
     test_X = np.load(feat_dir / "test_X.npy")
     test_paths = json.loads((feat_dir / "test_paths.json").read_text())
     print(f"test: {test_X.shape}")
@@ -736,12 +773,18 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("extract", help="Extract and cache features for all splits")
     e.add_argument("--data-root", required=True,
                    help="Root with train/, val/, test/ subdirs")
-    e.add_argument("--out", required=True, help="Where to write *_X.npy etc.")
+    e.add_argument("--out", required=True,
+                   help="Base feature cache dir; the active extractor kind "
+                        "(from extractor_config.yaml) is appended automatically, "
+                        "e.g. --out features -> features/spectral/")
     e.set_defaults(func=cmd_extract)
 
     t = sub.add_parser("train", help="Train all three stage-1 candidates, "
                                      "pick best on val, optionally train stage-2 heads")
-    t.add_argument("--features", required=True, help="Feature cache directory")
+    t.add_argument("--features", required=True,
+                   help="Base feature cache dir; the active extractor kind is "
+                        "appended automatically (must match the kind used at "
+                        "extract time).")
     t.add_argument("--out", required=True, help="Where to write *.joblib + results.json")
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--hierarchical", action="store_true",
@@ -750,7 +793,9 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(func=cmd_train)
 
     pr = sub.add_parser("predict", help="Predict on the test set")
-    pr.add_argument("--features", required=True)
+    pr.add_argument("--features", required=True,
+                    help="Base feature cache dir; the active extractor kind is "
+                         "appended automatically.")
     pr.add_argument("--model", required=True,
                     help="Path to best.joblib or hierarchical.joblib "
                          "(auto-detected).")
