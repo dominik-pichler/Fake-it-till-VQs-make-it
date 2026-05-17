@@ -39,6 +39,7 @@ from typing import Sequence, Union
 
 import numpy as np
 import torch
+torch.backends.mkldnn.enabled = False # Fix as it causes issues with oneDNN (MKLDNN)
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image

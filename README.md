@@ -114,6 +114,7 @@ Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
 
 
-
-
-
+# Quality Log
+- **First run:** (Spectral Extractor, 3 Models ST1, 1 Model Head ST2) end-to-end fine val acc (hard routing): 0.3763
+- **Second run:** (Spectral Extractor, 3 Models ST1, 3 Model Head ST2) end-to-end fine val acc (hard routing): 0.3776 --> so my assumption here is that it's an feature issue not a model issue.
+- 
