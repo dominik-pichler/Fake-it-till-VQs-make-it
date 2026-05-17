@@ -1,6 +1,6 @@
 # Which feature extractor to use.
 # One of: spectral, forensic, spectral_forensic, multi_encoder, combined
-extractor: forensic
+extractor: spectral_forensic
 
 # --- Per-extractor settings ---
 # Only the section matching `extractor` above is consumed. Keys map

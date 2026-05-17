@@ -116,5 +116,24 @@ Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
 # Quality Log
 - **First run:** (Spectral Extractor, 3 Models ST1, 1 Model Head ST2) end-to-end fine val acc (hard routing): 0.3763
-- **Second run:** (Spectral Extractor, 3 Models ST1, 3 Model Head ST2) end-to-end fine val acc (hard routing): 0.3776 --> so my assumption here is that it's an feature issue not a model issue.
-- 
+  - **Second run:** (Spectral Extractor, 3 Models ST1, 3 Model Head ST2) end-to-end fine val acc (hard routing): 0.3776 --> so my assumption here is that it's an feature issue not a model issue.
+    - **Third run:** Tested the encoders but this is not a feasable solution due to the very very slow processing on the container (~ 6.5sec/Image) caused by multiple factors: 
+
+      - Issues with mkldnn -> hence 30x slower
+    
+      ```python
+          import torch
+          from torchvision.models import resnet101, ResNet101_Weights
+          m = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2).eval()
+          x = torch.randn(1, 3, 256, 256)
+          with torch.no_grad():
+              y = m(x)
+          print('ok', y.shape)
+        ```
+      - CUDA not available: 
+        ```shell
+        python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
+        False 0
+        ``` 
+        
+  
