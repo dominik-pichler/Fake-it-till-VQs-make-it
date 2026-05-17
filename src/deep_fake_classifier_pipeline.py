@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import List
 
 import numpy as np
-from joblib import dump, load
+from joblib import Parallel, delayed, dump, load
+from tqdm import tqdm
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
@@ -232,15 +233,28 @@ def scoped_feature_dir(base: Path | str) -> Path:
 # Feature extraction with disk cache
 # ---------------------------------------------------------------------------
 
+def _extract_one(extractor, path: str) -> np.ndarray:
+    """Module-level wrapper so joblib can pickle the call cleanly."""
+    return extractor.extract(path)
+
+
 def extract_split(
     paths: list[Path],
     extractor,
     cache_path: Path,
+    n_jobs: int = 1,
     log_every: int = 500,
 ) -> np.ndarray:
     """
     Extract features for a list of image paths. Caches to .npy file.
     If cache exists and shape matches, loads from cache.
+
+    n_jobs:
+        1   -> serial (default; safe for any extractor, incl. torch-based).
+        >1  -> joblib loky workers. Use for numpy/scipy extractors
+               (spectral, forensic). Each worker re-imports the extractor's
+               modules; safe because they're CPU-only and stateless.
+        -1  -> use all available cores.
     """
     if cache_path.exists():
         cached = np.load(cache_path)
@@ -250,14 +264,22 @@ def extract_split(
         print(f"  cache shape mismatch, recomputing: {cache_path}")
 
     feats = np.empty((len(paths), extractor.n_features), dtype=np.float32)
-    t0 = time.time()
-    for i, p in enumerate(paths): # For each image get the features.
-        feats[i] = extractor.extract(str(p))
-        if (i + 1) % log_every == 0 or i == len(paths) - 1:
-            dt = time.time() - t0
-            rate = (i + 1) / dt
-            eta = (len(paths) - i - 1) / rate
-            print(f"  [{i+1:>6}/{len(paths)}] {rate:.1f} img/s  eta={eta/60:.1f}min")
+    desc = f"  extracting {cache_path.stem}"
+
+    if n_jobs == 1:
+        for i, p in enumerate(tqdm(paths, desc=desc, unit="img",
+                                   dynamic_ncols=True)):
+            feats[i] = extractor.extract(str(p))
+    else:
+        # return_as='generator' lets us stream results into the preallocated
+        # buffer while keeping submission order, so tqdm reflects real progress.
+        parallel = Parallel(n_jobs=n_jobs, return_as="generator")
+        results = parallel(
+            delayed(_extract_one)(extractor, str(p)) for p in paths
+        )
+        for i, vec in enumerate(tqdm(results, desc=desc, unit="img",
+                                     dynamic_ncols=True, total=len(paths))):
+            feats[i] = vec
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(cache_path, feats)
@@ -277,6 +299,7 @@ def cmd_extract(args: argparse.Namespace) -> None:
     extractor = build_extractor()
     print(f"Extractor: {type(extractor).__name__} with {extractor.n_features} features")
     print(f"Feature cache: {out_dir}")
+    print(f"Parallel workers: {args.n_jobs}")
 
     # Save metadata once for later inspection
     (out_dir / "feature_names.json").write_text(
@@ -294,7 +317,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
         paths, labels, subs = collect_split(split_dir)
         print(f"  {len(paths)} images across {len(set(subs))} sub-sources")
 
-        feats = extract_split(paths, extractor, out_dir / f"{split}_X.npy")
+        feats = extract_split(paths, extractor, out_dir / f"{split}_X.npy",
+                              n_jobs=args.n_jobs)
         np.save(out_dir / f"{split}_y.npy", labels)  # fine labels
         (out_dir / f"{split}_paths.json").write_text(
             json.dumps([str(p) for p in paths])
@@ -306,7 +330,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
         print("\n=== test ===")
         paths = collect_test(test_dir)
         print(f"  {len(paths)} images")
-        extract_split(paths, extractor, out_dir / "test_X.npy")
+        extract_split(paths, extractor, out_dir / "test_X.npy",
+                      n_jobs=args.n_jobs)
         (out_dir / "test_paths.json").write_text(
             json.dumps([str(p) for p in paths])
         )
@@ -777,6 +802,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Base feature cache dir; the active extractor kind "
                         "(from extractor_config.yaml) is appended automatically, "
                         "e.g. --out features -> features/spectral/")
+    e.add_argument("--n-jobs", type=int, default=1,
+                   help="Parallel workers for feature extraction. 1 (default) = "
+                        "serial; -1 = all cores. Safe for numpy/scipy extractors "
+                        "(spectral, forensic). Leave at 1 for multi_encoder "
+                        "(torch models multiply memory per worker).")
     e.set_defaults(func=cmd_extract)
 
     t = sub.add_parser("train", help="Train all three stage-1 candidates, "
