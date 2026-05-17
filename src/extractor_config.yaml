@@ -13,7 +13,16 @@ spectral:
   peak_bin_radius: 1
   n_radial_bins: 32
   qft_low_freq_fraction: 0.25
-  residual_sigma: 1.0
+
+  # Residual method (how content is suppressed before lens analysis).
+  # One of: gaussian | median | multi_gaussian | wavelet
+  residual_method: gaussian
+  residual_sigma: 1.0                 # used by 'gaussian'
+  residual_sigmas: [0.5, 1.0, 2.0]    # used by 'multi_gaussian'
+  residual_median_size: 3             # used by 'median'
+  residual_wavelet_levels: 2          # used by 'wavelet'
+  residual_wavelet_lambda: 3.0        # used by 'wavelet'
+
   use_rgb_lens: true
   use_dct_lens: true
   use_qft_lens: true

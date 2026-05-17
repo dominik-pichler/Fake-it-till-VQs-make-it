@@ -8,10 +8,14 @@ Reorganised around the three training-free latent spaces from the paper
     2. DCT space  -- per-channel 2D Discrete Cosine Transform statistics
     3. QFT space  -- grayscale FFT, low-frequency band only
 
-Each lens is applied to a high-pass residual (image - Gaussian(image)) so that
-content is suppressed and tokenizer/decoder artefacts are emphasised. This is
-a cheap stand-in for a DIRE-style reconstruction residual; swap _compute_residual
-for a real reconstruction model later if desired.
+Each lens is applied to a high-pass residual so that content is suppressed
+and tokenizer/decoder artefacts are emphasised. The residual computation is
+configurable via FeatureConfig.residual_method:
+    'gaussian'        -- input - Gaussian(input)             (cheap, leaky)
+    'median'          -- input - Median(input)               (edge-preserving)
+    'multi_gaussian'  -- average of Gaussian residuals at multiple sigmas
+    'wavelet'         -- Haar wavelet shrinkage denoiser; closest in spirit
+                         to classical PRNU work
 
 The output feeds a linear/SVM/small-MLP 4-way classifier
 {Real, LlamaGen, VAR/HMAR, RAR}.
@@ -54,8 +58,28 @@ class FeatureConfig:
     # is <= this fraction of the Nyquist limit. 0.25 keeps the inner quarter.
     qft_low_freq_fraction: float = 0.25
 
-    # High-pass filter sigma for computing the residual.
+    # ---- Residual computation -------------------------------------------
+    # How content is suppressed before lens analysis. Options:
+    #   'gaussian'        -- channel - Gaussian(channel)   (cheap, leaky)
+    #   'median'          -- channel - Median(channel)     (edge-preserving)
+    #   'multi_gaussian'  -- average of Gaussian residuals at multiple sigmas
+    #   'wavelet'         -- Haar wavelet shrinkage denoiser; residual is
+    #                        the difference between input and denoised
+    #                        (closest in spirit to classical PRNU work)
+    residual_method: str = "gaussian"
+
+    # Used by 'gaussian'.
     residual_sigma: float = 1.0
+
+    # Used by 'multi_gaussian'. Residuals at each sigma are averaged.
+    residual_sigmas: Sequence[float] = (0.5, 1.0, 2.0)
+
+    # Used by 'median'.
+    residual_median_size: int = 3
+
+    # Used by 'wavelet'.
+    residual_wavelet_levels: int = 2
+    residual_wavelet_lambda: float = 3.0       # threshold = lambda * sigma_noise_est
 
     # Toggle each lens.
     use_rgb_lens: bool = True
@@ -107,14 +131,134 @@ def _moment_stats(x: np.ndarray) -> np.ndarray:
     return np.asarray([mean, std, skew, kurt, energy, grad_mean], dtype=np.float32)
 
 
-def _compute_residual(rgb: np.ndarray, sigma: float) -> np.ndarray:
+# ---------------------------------------------------------------------------
+# Residual computation: several methods, dispatched by FeatureConfig
+# ---------------------------------------------------------------------------
+
+def _residual_gaussian(channel: np.ndarray, sigma: float) -> np.ndarray:
+    return channel - ndimage.gaussian_filter(channel, sigma=sigma)
+
+
+def _residual_median(channel: np.ndarray, size: int) -> np.ndarray:
+    return channel - ndimage.median_filter(channel, size=size)
+
+
+def _residual_multi_gaussian(channel: np.ndarray,
+                             sigmas: Sequence[float]) -> np.ndarray:
+    """Average of Gaussian residuals across multiple scales."""
+    acc = np.zeros_like(channel, dtype=np.float32)
+    for s in sigmas:
+        acc += channel - ndimage.gaussian_filter(channel, sigma=s)
+    return acc / float(len(sigmas))
+
+
+# --- Haar wavelet shrinkage ------------------------------------------------
+
+def _haar_step(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """One level 2D Haar DWT. Returns (cA, cH, cV, cD) on the trimmed grid."""
+    h, w = x.shape
+    h -= h % 2
+    w -= w % 2
+    x = x[:h, :w]
+    a = x[0::2, 0::2]
+    b = x[0::2, 1::2]
+    c = x[1::2, 0::2]
+    d = x[1::2, 1::2]
+    cA = (a + b + c + d) * 0.5
+    cH = (a + b - c - d) * 0.5
+    cV = (a - b + c - d) * 0.5
+    cD = (a - b - c + d) * 0.5
+    return cA, cH, cV, cD
+
+
+def _haar_istep(cA: np.ndarray, cH: np.ndarray,
+                cV: np.ndarray, cD: np.ndarray) -> np.ndarray:
+    """Inverse one level 2D Haar DWT."""
+    a = (cA + cH + cV + cD) * 0.5
+    b = (cA + cH - cV - cD) * 0.5
+    c = (cA - cH + cV - cD) * 0.5
+    d = (cA - cH - cV + cD) * 0.5
+    h2, w2 = a.shape
+    out = np.empty((h2 * 2, w2 * 2), dtype=a.dtype)
+    out[0::2, 0::2] = a
+    out[0::2, 1::2] = b
+    out[1::2, 0::2] = c
+    out[1::2, 1::2] = d
+    return out
+
+
+def _residual_wavelet(channel: np.ndarray, levels: int,
+                      lam: float) -> np.ndarray:
+    """Haar wavelet shrinkage residual.
+
+    Noise sigma is estimated robustly from the finest diagonal (HH) sub-band
+    via MAD/0.6745, then detail sub-bands at every level are soft-thresholded
+    at lam * sigma. The denoised reconstruction is subtracted from the input.
     """
-    High-pass residual: image - Gaussian(image), per channel.
-    Stand-in for a DIRE-style reconstruction residual. Same shape as input.
-    """
+    work = channel.astype(np.float32, copy=True)
+    cA = work
+    details: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    for _ in range(levels):
+        cA, cH, cV, cD = _haar_step(cA)
+        details.append((cH, cV, cD))
+
+    # Noise estimate from finest diagonal sub-band (MAD).
+    fine_hh = details[0][2]
+    sigma_n = float(np.median(np.abs(fine_hh))) / 0.6745
+    threshold = lam * sigma_n
+
+    # Soft-threshold all detail sub-bands.
+    shrunk = []
+    for cH, cV, cD in details:
+        shrunk.append((
+            np.sign(cH) * np.maximum(np.abs(cH) - threshold, 0.0),
+            np.sign(cV) * np.maximum(np.abs(cV) - threshold, 0.0),
+            np.sign(cD) * np.maximum(np.abs(cD) - threshold, 0.0),
+        ))
+
+    # Reconstruct.
+    rec = cA
+    for cH, cV, cD in reversed(shrunk):
+        rec = _haar_istep(rec, cH, cV, cD)
+
+    # If forward trimmed an odd-sized edge, pad denoised reconstruction back
+    # to the original shape so subtraction stays aligned.
+    h, w = channel.shape
+    if rec.shape != (h, w):
+        full = np.zeros((h, w), dtype=rec.dtype)
+        rh, rw = rec.shape
+        full[:rh, :rw] = rec
+        # The dropped edge pixels are left as input -> residual 0 there.
+        full[rh:, :] = channel[rh:, :]
+        full[:rh, rw:] = channel[:rh, rw:]
+        rec = full
+    return channel - rec
+
+
+# --- Dispatcher ------------------------------------------------------------
+
+def _compute_residual(rgb: np.ndarray, cfg: FeatureConfig) -> np.ndarray:
+    """Per-channel residual, method selected by cfg.residual_method."""
+    method = cfg.residual_method
+    if method == "gaussian":
+        fn = lambda ch: _residual_gaussian(ch, cfg.residual_sigma)
+    elif method == "median":
+        fn = lambda ch: _residual_median(ch, cfg.residual_median_size)
+    elif method == "multi_gaussian":
+        fn = lambda ch: _residual_multi_gaussian(ch, cfg.residual_sigmas)
+    elif method == "wavelet":
+        fn = lambda ch: _residual_wavelet(
+            ch, cfg.residual_wavelet_levels, cfg.residual_wavelet_lambda,
+        )
+    else:
+        raise ValueError(
+            f"Unknown residual_method: {method!r}. "
+            f"Expected 'gaussian', 'median', 'multi_gaussian', or 'wavelet'."
+        )
+
     res = np.empty_like(rgb)
     for c in range(rgb.shape[-1]):
-        res[..., c] = rgb[..., c] - ndimage.gaussian_filter(rgb[..., c], sigma=sigma)
+        res[..., c] = fn(rgb[..., c])
     return res
 
 
@@ -395,7 +539,7 @@ class SpectralFeatureExtractor:
         """
         c = self.cfg
         rgb = _load_and_normalise(image, c.image_size)
-        residual = _compute_residual(rgb, c.residual_sigma)
+        residual = _compute_residual(rgb, c)
 
         blocks: list[np.ndarray] = []
         if c.use_rgb_lens:

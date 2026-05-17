@@ -418,97 +418,109 @@ def train_stage2_heads(
     heads: dict[int, Pipeline] = {}
     head_results: dict[int, dict] = {}
 
-    for coarse_idx, fine_members in COARSE_TO_FINE.items():
-        if len(fine_members) < 2:
-            continue  # singleton family (Real) needs no head
+    multi_member_families = [
+        (ci, fm) for ci, fm in COARSE_TO_FINE.items() if len(fm) >= 2
+    ]
 
-        family_name = COARSE_NAMES[coarse_idx]
-        mask_tr = np.isin(y_fine_tr, fine_members)
-        mask_va = np.isin(y_fine_va, fine_members)
+    with tqdm(multi_member_families, desc="stage2 heads", unit="family",
+              dynamic_ncols=True) as fam_bar:
+        for coarse_idx, fine_members in fam_bar:
+            family_name = COARSE_NAMES[coarse_idx]
+            fam_bar.set_description(f"stage2 [{family_name}]")
+            mask_tr = np.isin(y_fine_tr, fine_members)
+            mask_va = np.isin(y_fine_va, fine_members)
 
-        Xf_tr, yf_tr = X_tr[mask_tr], y_fine_tr[mask_tr]
-        Xf_va, yf_va = X_va[mask_va], y_fine_va[mask_va]
+            Xf_tr, yf_tr = X_tr[mask_tr], y_fine_tr[mask_tr]
+            Xf_va, yf_va = X_va[mask_va], y_fine_va[mask_va]
 
-        print(f"\n  --- stage2 head [{family_name}] "
-              f"({len(fine_members)}-way) ---")
-        print(f"    n_train={mask_tr.sum()}, n_val={mask_va.sum()}")
-        tr_counts = {FINE_NAMES[c]: int((yf_tr == c).sum()) for c in fine_members}
-        va_counts = {FINE_NAMES[c]: int((yf_va == c).sum()) for c in fine_members}
-        print(f"    train class counts: {tr_counts}")
-        print(f"    val   class counts: {va_counts}")
+            tqdm.write(f"\n  --- stage2 head [{family_name}] "
+                       f"({len(fine_members)}-way) ---")
+            tqdm.write(f"    n_train={mask_tr.sum()}, n_val={mask_va.sum()}")
+            tr_counts = {FINE_NAMES[c]: int((yf_tr == c).sum()) for c in fine_members}
+            va_counts = {FINE_NAMES[c]: int((yf_va == c).sum()) for c in fine_members}
+            tqdm.write(f"    train class counts: {tr_counts}")
+            tqdm.write(f"    val   class counts: {va_counts}")
 
-        # Guard against degenerate subsets: at least 2 distinct fine classes,
-        # each with >=1 sample, must be present in train.
-        present_in_train = [c for c in fine_members if (yf_tr == c).sum() > 0]
-        if len(present_in_train) < 2:
-            missing = [FINE_NAMES[c] for c in fine_members
-                       if (yf_tr == c).sum() == 0]
-            print(f"    [skip] head not trainable: only "
-                  f"{len(present_in_train)} of {len(fine_members)} fine "
-                  f"classes have train data. Missing: {missing}", file=sys.stderr)
+            # Guard against degenerate subsets: at least 2 distinct fine classes,
+            # each with >=1 sample, must be present in train.
+            present_in_train = [c for c in fine_members if (yf_tr == c).sum() > 0]
+            if len(present_in_train) < 2:
+                missing = [FINE_NAMES[c] for c in fine_members
+                           if (yf_tr == c).sum() == 0]
+                tqdm.write(f"    [skip] head not trainable: only "
+                           f"{len(present_in_train)} of {len(fine_members)} fine "
+                           f"classes have train data. Missing: {missing}")
+                head_results[coarse_idx] = {
+                    "family_name": family_name,
+                    "fine_members": fine_members,
+                    "skipped_reason": f"missing train data for {missing}",
+                    "n_train": int(mask_tr.sum()),
+                    "n_val": int(mask_va.sum()),
+                }
+                continue
+
+            candidates = build_stage2_candidates(random_state=random_state)
+            per_candidate: dict[str, dict] = {}
+            best_name: str | None = None
+            best_score: float = -1.0
+            best_pipe: Pipeline | None = None
+            selection_basis = "val" if mask_va.sum() > 0 else "train"
+
+            with tqdm(candidates.items(), desc=f"  {family_name} heads",
+                      unit="model", total=len(candidates), leave=False,
+                      dynamic_ncols=True) as cand_bar:
+                for cand_name, pipe in cand_bar:
+                    cand_bar.set_description(f"  {family_name} [{cand_name}]")
+                    t0 = time.time()
+                    pipe.fit(Xf_tr, yf_tr)
+                    fit_dt = time.time() - t0
+
+                    tr_eval = evaluate(pipe, Xf_tr, yf_tr, FINE_NAMES)
+                    va_eval = (evaluate(pipe, Xf_va, yf_va, FINE_NAMES)
+                               if mask_va.sum() > 0 else None)
+                    score = va_eval["accuracy"] if va_eval else tr_eval["accuracy"]
+                    va_acc_str = f"{va_eval['accuracy']:.4f}" if va_eval else "n/a"
+
+                    tqdm.write(f"    [{cand_name:10s}] fit: {fit_dt:.1f}s  "
+                               f"train acc={tr_eval['accuracy']:.4f}  "
+                               f"val acc={va_acc_str}")
+                    if va_eval:
+                        for cls_idx in fine_members:
+                            cls_name = FINE_NAMES[cls_idx]
+                            m = va_eval["report"].get(cls_name)
+                            if m:
+                                tqdm.write(f"        {cls_name:12s} "
+                                           f"P={m['precision']:.3f} "
+                                           f"R={m['recall']:.3f} "
+                                           f"F1={m['f1-score']:.3f}")
+
+                    per_candidate[cand_name] = {
+                        "fit_seconds": fit_dt,
+                        "train": tr_eval,
+                        "val": va_eval,
+                    }
+                    if score > best_score:
+                        best_score = score
+                        best_name = cand_name
+                        best_pipe = pipe
+
+            assert best_pipe is not None and best_name is not None
+            tqdm.write(f"    >>> best for {family_name}: {best_name} "
+                       f"({selection_basis} acc={best_score:.4f})")
+            fam_bar.set_postfix(best=best_name,
+                                acc=f"{best_score:.3f}")
+
+            heads[coarse_idx] = best_pipe
             head_results[coarse_idx] = {
                 "family_name": family_name,
                 "fine_members": fine_members,
-                "skipped_reason": f"missing train data for {missing}",
                 "n_train": int(mask_tr.sum()),
                 "n_val": int(mask_va.sum()),
+                "best_candidate": best_name,
+                "selection_basis": selection_basis,
+                "selection_score": best_score,
+                "per_candidate": per_candidate,
             }
-            continue
-
-        candidates = build_stage2_candidates(random_state=random_state)
-        per_candidate: dict[str, dict] = {}
-        best_name: str | None = None
-        best_score: float = -1.0
-        best_pipe: Pipeline | None = None
-        selection_basis = "val" if mask_va.sum() > 0 else "train"
-
-        for cand_name, pipe in candidates.items():
-            t0 = time.time()
-            pipe.fit(Xf_tr, yf_tr)
-            fit_dt = time.time() - t0
-
-            tr_eval = evaluate(pipe, Xf_tr, yf_tr, FINE_NAMES)
-            va_eval = (evaluate(pipe, Xf_va, yf_va, FINE_NAMES)
-                       if mask_va.sum() > 0 else None)
-            score = va_eval["accuracy"] if va_eval else tr_eval["accuracy"]
-            va_acc_str = f"{va_eval['accuracy']:.4f}" if va_eval else "n/a"
-
-            print(f"    [{cand_name:10s}] fit: {fit_dt:.1f}s  "
-                  f"train acc={tr_eval['accuracy']:.4f}  val acc={va_acc_str}")
-            if va_eval:
-                for cls_idx in fine_members:
-                    cls_name = FINE_NAMES[cls_idx]
-                    m = va_eval["report"].get(cls_name)
-                    if m:
-                        print(f"        {cls_name:12s} "
-                              f"P={m['precision']:.3f} R={m['recall']:.3f} "
-                              f"F1={m['f1-score']:.3f}")
-
-            per_candidate[cand_name] = {
-                "fit_seconds": fit_dt,
-                "train": tr_eval,
-                "val": va_eval,
-            }
-            if score > best_score:
-                best_score = score
-                best_name = cand_name
-                best_pipe = pipe
-
-        assert best_pipe is not None and best_name is not None
-        print(f"    >>> best for {family_name}: {best_name} "
-              f"({selection_basis} acc={best_score:.4f})")
-
-        heads[coarse_idx] = best_pipe
-        head_results[coarse_idx] = {
-            "family_name": family_name,
-            "fine_members": fine_members,
-            "n_train": int(mask_tr.sum()),
-            "n_val": int(mask_va.sum()),
-            "best_candidate": best_name,
-            "selection_basis": selection_basis,
-            "selection_score": best_score,
-            "per_candidate": per_candidate,
-        }
 
     return heads, head_results
 
@@ -590,29 +602,34 @@ def cmd_train(args: argparse.Namespace) -> None:
     classifiers = build_classifiers(random_state=args.seed)
     results: dict[str, dict] = {}
 
-    for name, pipe in classifiers.items():
-        print(f"\n--- stage1 [{name}] ---")
-        t0 = time.time()
-        pipe.fit(X_tr, y_coarse_tr)
-        train_dt = time.time() - t0
+    with tqdm(classifiers.items(), desc="stage1", unit="model",
+              total=len(classifiers), dynamic_ncols=True) as bar:
+        for name, pipe in bar:
+            bar.set_description(f"stage1 [{name}]")
+            tqdm.write(f"\n--- stage1 [{name}] ---")
+            t0 = time.time()
+            pipe.fit(X_tr, y_coarse_tr)
+            train_dt = time.time() - t0
 
-        train_eval = evaluate(pipe, X_tr, y_coarse_tr, COARSE_NAMES)
-        val_eval = evaluate(pipe, X_va, y_coarse_va, COARSE_NAMES)
-        results[name] = {
-            "fit_seconds": train_dt,
-            "train": train_eval,
-            "val": val_eval,
-        }
+            train_eval = evaluate(pipe, X_tr, y_coarse_tr, COARSE_NAMES)
+            val_eval = evaluate(pipe, X_va, y_coarse_va, COARSE_NAMES)
+            results[name] = {
+                "fit_seconds": train_dt,
+                "train": train_eval,
+                "val": val_eval,
+            }
 
-        print(f"  fit: {train_dt:.1f}s")
-        print(f"  train acc: {train_eval['accuracy']:.4f}")
-        print(f"  val   acc: {val_eval['accuracy']:.4f}")
-        for cls, m in val_eval["report"].items():
-            if cls in COARSE_NAMES:
-                print(f"    {cls:10s} P={m['precision']:.3f} "
-                      f"R={m['recall']:.3f} F1={m['f1-score']:.3f}")
+            bar.set_postfix(val_acc=f"{val_eval['accuracy']:.3f}",
+                            fit=f"{train_dt:.1f}s")
+            tqdm.write(f"  fit: {train_dt:.1f}s")
+            tqdm.write(f"  train acc: {train_eval['accuracy']:.4f}")
+            tqdm.write(f"  val   acc: {val_eval['accuracy']:.4f}")
+            for cls, m in val_eval["report"].items():
+                if cls in COARSE_NAMES:
+                    tqdm.write(f"    {cls:10s} P={m['precision']:.3f} "
+                               f"R={m['recall']:.3f} F1={m['f1-score']:.3f}")
 
-        dump(pipe, out_dir / f"stage1_{name}.joblib")
+            dump(pipe, out_dir / f"stage1_{name}.joblib")
 
     best_name = max(results, key=lambda k: results[k]["val"]["accuracy"])
     best_pipe = classifiers[best_name]
