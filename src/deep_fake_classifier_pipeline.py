@@ -34,7 +34,7 @@ DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best.joblib"
 # ---------------------------------------------------------------------------
 
 # Coarse (stage-1) classes
-COARSE_NAMES = ["Real", "LlamaGen", "VAR_HMAR", "RAR"]
+COARSE_NAMES = ["Real", "LlamaGen", "HMAR", "VAR", "RAR"]
 
 # Fine (stage-2) classes -- index must match SUBSOURCE_TO_LABEL values below
 FINE_NAMES = [
@@ -65,14 +65,15 @@ SUBSOURCE_TO_LABEL = {
 # fine_idx -> coarse_idx
 #                          0  1  2  3  4  5  6  7  8
 #                         Real H  H  L  L  V  V  R  R
-FINE_TO_COARSE = np.array([0, 2, 2, 1, 1, 2, 2, 3, 3], dtype=np.int64)
+FINE_TO_COARSE = np.array([0, 2, 2, 1, 1, 3, 3, 4, 4], dtype=np.int64)
 
 # coarse_idx -> ordered list of fine indices belonging to that family
 COARSE_TO_FINE: dict[int, list[int]] = {
     0: [0],            # Real
     1: [3, 4],         # LlamaGen: B, L
-    2: [1, 2, 5, 6],   # VAR_HMAR: HMAR_d20, HMAR_d30, VAR_d20, VAR_d30
-    3: [7, 8],         # RAR: L, XXL
+    2: [1, 2],         # HMAR: d20, d30
+    3: [5, 6],         # VAR:  d20, d30
+    4: [7, 8],         # RAR:  L, XXL
 }
 
 # Kept for backward compatibility with older code paths

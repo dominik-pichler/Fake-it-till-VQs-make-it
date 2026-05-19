@@ -102,10 +102,21 @@ It takes image paths, returns integer labels (0–8). You're free to use any app
 
 ---
 
-# Current State of Implementation and Next Steps: 
+# Extractors
+
+# Residual Calculations
+Four methods are available; all are pure numpy + scipy:
+- gaussian:  $input - Gaussian(input)$ -> (cheap, leaky)
+- median:    $input - Median(input)$               (edge-preserving)
+- multi_gaussian:  $average \ of \ Gaussian  \ residuals \ at \ multiple \ sigmas$
+- wavelet:         $Haar \ wavelet \ shrinkage \ denoiser$; closest in spirit  to classical PRNU work
+
+# Next Steps: 
 Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
 - [ ] Residuals are currently ony determined by comparison to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
+    - Different residual determination models are evaluated and documented in [the experiment](src/experiment.md)
+- [ ] Detecting Real images is apparently still very hard for the Classifiers -> maybe I can find some suitable metrics? 
 - [ ] Intra-Family Classifier is still not performing well - this needs to be improved 
 - [ ] Classifiers are currently only Logistic Regression, Linear SVM , HistGradientBoosting yet, using CNNs seem more promising
       Could happen via: Encoder: maps 128-dim fingerprint → parameters (μ, σ) of a 64-dim Gaussian
@@ -116,24 +127,24 @@ Current State of implementation can be found in the [Changelog](CHANGELOG.md)
 
 # Quality Log
 - **First run:** (Spectral Extractor, 3 Models ST1, 1 Model Head ST2) end-to-end fine val acc (hard routing): 0.3763
-  - **Second run:** (Spectral Extractor, 3 Models ST1, 3 Model Head ST2) end-to-end fine val acc (hard routing): 0.3776 --> so my assumption here is that it's an feature issue not a model issue.
-    - **Third run:** Tested the encoders but this is not a feasable solution due to the very very slow processing on the container (~ 6.5sec/Image) caused by multiple factors: 
+- **Second run:** (Spectral Extractor, 3 Models ST1, 3 Model Head ST2) end-to-end fine val acc (hard routing): 0.3776 --> so my assumption here is that it's an feature issue not a model issue.
+- **Third run:** Tested the encoders but this is not a feasable solution due to the very very slow processing on the container (~ 6.5sec/Image) caused by multiple factors: 
 
-      - Issues with mkldnn -> hence 30x slower
+  - Issues with mkldnn -> hence 30x slower
     
-      ```python
-          import torch
-          from torchvision.models import resnet101, ResNet101_Weights
-          m = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2).eval()
-          x = torch.randn(1, 3, 256, 256)
-          with torch.no_grad():
-              y = m(x)
-          print('ok', y.shape)
-        ```
-      - CUDA not available: 
-        ```shell
-        python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
-        False 0
-        ``` 
+  ```python
+      import torch
+      from torchvision.models import resnet101, ResNet101_Weights
+      m = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2).eval()
+      x = torch.randn(1, 3, 256, 256)
+      with torch.no_grad():
+          y = m(x)
+      print('ok', y.shape)
+    ```
+  - CUDA not available: 
+    ```shell
+    python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
+    False 0
+    ``` 
         
   

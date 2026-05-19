@@ -1,6 +1,7 @@
 # Which feature extractor to use.
-# One of: spectral, forensic, spectral_forensic, multi_encoder, combined
-extractor: spectral_forensic
+# One of: spectral, forensic, spectral_forensic, lens_features,
+#         spectral_forensic_lens, multi_encoder, combined
+extractor: spectral_forensic_lens
 
 # --- Per-extractor settings ---
 # Only the section matching `extractor` above is consumed. Keys map
@@ -45,6 +46,45 @@ spectral_forensic:
   # empty to use the dataclass defaults from each extractor.
   spectral: {}
   forensic: {}
+
+lens_features:
+  image_size: 256
+
+  # Block toggles -- turn any of the four off if you want to ablate.
+  use_nlf: true
+  use_cfa: true
+  use_radial_residual: true
+  use_lca: true
+
+  # NLF (Noise-Level Function): per-patch (mean, std) -> binned curve + fit
+  nlf_patch: 8
+  nlf_texture_drop: 0.5          # drop the texturedest half of patches
+  nlf_n_bins: 16
+
+  # CFA (Colour Filter Array) periodicity peaks
+  cfa_highpass_sigma: 1.0
+  cfa_peak_radius: 2
+
+  # Radial spectrum of the shrinkage residual. res_method must match one of
+  # residual_methods.VALID_METHODS: gaussian | median | multi_gaussian | wavelet.
+  res_method: wavelet
+  res_sigma: 1.0
+  res_sigmas: [0.5, 1.0, 2.0]
+  res_median_size: 3
+  res_wavelet_levels: 2
+  res_wavelet_lambda: 3.0
+  res_n_radial_bins: 64
+
+  # Lateral Chromatic Aberration: per-tile sub-pixel shift -> radial fit
+  lca_tiles: 4
+  lca_search_radius: 3
+
+spectral_forensic_lens:
+  # Override individual sub-blocks here; leave any empty to use the
+  # dataclass defaults from each extractor.
+  spectral: {}
+  forensic: {}
+  lens_features: {}
 
 multi_encoder:
   image_size: 256
