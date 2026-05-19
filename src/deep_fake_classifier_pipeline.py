@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import List
@@ -11,13 +12,13 @@ from typing import List
 import numpy as np
 from joblib import Parallel, delayed, dump, load
 from tqdm import tqdm
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
-from sklearn.calibration import CalibratedClassifierCV
 
 from extractor_factory import build_extractor
 
@@ -342,15 +343,54 @@ def cmd_extract(args: argparse.Namespace) -> None:
 # Classifier factory + evaluation
 # ---------------------------------------------------------------------------
 
+class _ElapsedBar:
+    """Live elapsed-time tqdm bar for wrapping a blocking call.
+
+    sklearn .fit() blocks the main thread with no progress callback, so a
+    background thread refreshes a tqdm bar every 0.5s to keep the elapsed
+    counter ticking. Use as a context manager; exits cleanly even if .fit()
+    raises.
+    """
+
+    def __init__(self, desc: str):
+        self._desc = desc
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._bar: tqdm | None = None
+
+    def __enter__(self) -> "_ElapsedBar":
+        self._bar = tqdm(
+            total=0, desc=self._desc, leave=False, dynamic_ncols=True,
+            bar_format="    {desc} [elapsed {elapsed}]",
+        )
+        self._thread = threading.Thread(target=self._tick, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        if self._bar is not None:
+            self._bar.close()
+
+    def _tick(self) -> None:
+        while not self._stop.wait(0.5):
+            if self._bar is not None:
+                self._bar.refresh()
+
+
 def build_classifiers(random_state: int = 0) -> dict[str, Pipeline]:
     """All three candidates share a StandardScaler front-end."""
     return {
         "logreg": Pipeline([
             ("scaler", StandardScaler()),
             ("clf", LogisticRegression(
+                solver="newton-cholesky",
                 max_iter=2000,
                 class_weight="balanced",
                 C=1.0,
+                tol=1e-3,
                 random_state=random_state,
             )),
         ]),
@@ -473,7 +513,8 @@ def train_stage2_heads(
                 for cand_name, pipe in cand_bar:
                     cand_bar.set_description(f"  {family_name} [{cand_name}]")
                     t0 = time.time()
-                    pipe.fit(Xf_tr, yf_tr)
+                    with _ElapsedBar(f"fitting {family_name} [{cand_name}]"):
+                        pipe.fit(Xf_tr, yf_tr)
                     fit_dt = time.time() - t0
 
                     tr_eval = evaluate(pipe, Xf_tr, yf_tr, FINE_NAMES)
@@ -609,7 +650,8 @@ def cmd_train(args: argparse.Namespace) -> None:
             bar.set_description(f"stage1 [{name}]")
             tqdm.write(f"\n--- stage1 [{name}] ---")
             t0 = time.time()
-            pipe.fit(X_tr, y_coarse_tr)
+            with _ElapsedBar(f"fitting stage1 [{name}]"):
+                pipe.fit(X_tr, y_coarse_tr)
             train_dt = time.time() - t0
 
             train_eval = evaluate(pipe, X_tr, y_coarse_tr, COARSE_NAMES)

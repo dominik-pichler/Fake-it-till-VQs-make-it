@@ -46,3 +46,17 @@ Settings:
 | VAR_d30    | 0.301 | 0.314 | 0.308 |
 | RAR_L      | 0.433 | 0.466 | 0.441 |
 | RAR_XXL    | 0.420 | 0.481 | 0.449 |
+
+## 19.Mai, 14:30
+extractor: spectral_forensic_lens
+residual_method: gaussian
+
+### LogREG
+
+| Class     | Precision | Recall | F1    |
+|-----------|----------|--------|-------|
+| Real      | 0.666    | 0.749  | 0.705 |
+| LlamaGen  | 0.906    | 0.914  | 0.910 |
+| HMAR      | 0.572    | 0.576  | 0.574 |
+| VAR       | 0.576    | 0.565  | 0.570 |
+| RAR       | 0.875    | 0.824  | 0.849 |

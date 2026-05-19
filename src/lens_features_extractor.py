@@ -71,6 +71,7 @@ class LensFeaturesConfig:
     use_nlf: bool = True
     use_cfa: bool = True
     use_radial_residual: bool = True
+    use_angular_residual: bool = True
     use_lca: bool = True
 
     # ---- NLF -----------------------------------------------------------
@@ -102,6 +103,16 @@ class LensFeaturesConfig:
     res_wavelet_lambda: float = 3.0
     # Log-spaced bins covering [1, N/2-1] cycles in the 2D FFT.
     res_n_radial_bins: int = 64
+
+    # ---- Angular residual spectrum -------------------------------------
+    # Bins the same FFT magnitude (folded to [0, pi) via conjugate symmetry)
+    # by orientation rather than radius. Discriminates synthetic-vs-synthetic
+    # (each decoder's upsampling kernel leaves a different angular signature)
+    # where the radial profile primarily discriminates real-vs-synthetic.
+    # Confined to a mid-frequency annulus where upsampling artefacts live.
+    ang_n_bins: int = 16
+    ang_r_min_frac: float = 0.25
+    ang_r_max_frac: float = 0.75
 
     # ---- LCA -----------------------------------------------------------
     # Tile grid (LCA_TILES x LCA_TILES tiles across the image).
@@ -313,13 +324,14 @@ def _radial_spectrum(residual: np.ndarray, n_bins: int) -> np.ndarray:
     return profile
 
 
-def _radial_residual_features(gray: np.ndarray,
-                              cfg: LensFeaturesConfig) -> np.ndarray:
+def _shrinkage_residual(gray: np.ndarray,
+                        cfg: LensFeaturesConfig) -> np.ndarray:
+    """Compute the configured shrinkage residual on a 2D channel."""
     if cfg.res_method not in VALID_METHODS:
         raise ValueError(
             f"Unknown res_method {cfg.res_method!r}; expected one of {VALID_METHODS}."
         )
-    res = compute_residual_channel(
+    return compute_residual_channel(
         gray, cfg.res_method,
         sigma=cfg.res_sigma,
         sigmas=cfg.res_sigmas,
@@ -327,7 +339,64 @@ def _radial_residual_features(gray: np.ndarray,
         wavelet_levels=cfg.res_wavelet_levels,
         wavelet_lambda=cfg.res_wavelet_lambda,
     )
-    return _radial_spectrum(res, cfg.res_n_radial_bins)
+
+
+def _angular_spectrum(residual: np.ndarray, n_bins: int,
+                      r_min_frac: float, r_max_frac: float) -> np.ndarray:
+    """Orientation profile of the 2D FFT magnitude inside a mid-freq annulus.
+
+    Folds [-pi, pi) to [0, pi) using the conjugate-symmetry of the FFT of a
+    real image, so 16 bins resolve to 11.25 deg each. L1-normalised; the
+    feature is the angular *shape* of the spectrum, not absolute energy.
+    """
+    H, W = residual.shape
+    r = residual - residual.mean()
+    spec = np.abs(np.fft.fftshift(np.fft.fft2(r))).astype(np.float32)
+
+    cy, cx = H // 2, W // 2
+    y, x = np.indices((H, W))
+    dy = (y - cy).astype(np.float32)
+    dx = (x - cx).astype(np.float32)
+    radius = np.sqrt(dy * dy + dx * dx)
+    # Fold conjugate symmetry to [0, pi) via modulo. atan2(0,0) = 0 is fine
+    # since we mask out the DC pixel below.
+    angle = np.arctan2(dy, dx) % np.pi
+
+    r_nyq = float(min(cy, cx) - 1)
+    r_min = r_min_frac * r_nyq
+    r_max = r_max_frac * r_nyq
+    if r_max < r_min + 1.0:
+        return np.zeros(n_bins, dtype=np.float32)
+
+    mask = (radius >= r_min) & (radius <= r_max)
+    a = angle[mask]
+    s = spec[mask]
+    if a.size == 0:
+        return np.zeros(n_bins, dtype=np.float32)
+
+    # np.histogram with weights is the vectorised binning; divide by counts
+    # to get the mean per bin (matches the radial-spectrum convention).
+    weight_sum, _ = np.histogram(a, bins=n_bins, range=(0.0, np.pi), weights=s)
+    counts, _ = np.histogram(a, bins=n_bins, range=(0.0, np.pi))
+    profile = np.where(counts > 0,
+                       weight_sum / np.maximum(counts, 1),
+                       0.0).astype(np.float32)
+    total = float(profile.sum())
+    if total > 0.0:
+        profile = profile / total
+    return profile
+
+
+def _radial_residual_features(residual: np.ndarray,
+                              cfg: LensFeaturesConfig) -> np.ndarray:
+    return _radial_spectrum(residual, cfg.res_n_radial_bins)
+
+
+def _angular_residual_features(residual: np.ndarray,
+                               cfg: LensFeaturesConfig) -> np.ndarray:
+    return _angular_spectrum(
+        residual, cfg.ang_n_bins, cfg.ang_r_min_frac, cfg.ang_r_max_frac,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +533,9 @@ class LensFeaturesExtractor:
         if c.use_radial_residual:
             for i in range(c.res_n_radial_bins):
                 self._names.append(f"resradspec_b{i:03d}")
+        if c.use_angular_residual:
+            for i in range(c.ang_n_bins):
+                self._names.append(f"resangspec_b{i:02d}")
         if c.use_lca:
             for label, _ch, _ref in _LCA_PAIRS:
                 for tag in _LCA_PAIR_TAGS:
@@ -482,13 +554,20 @@ class LensFeaturesExtractor:
         rgb = _load_rgb(image, c.image_size)
         gray = _to_gray(rgb)
 
+        # Compute the shrinkage residual once if either spectrum block uses it.
+        residual = None
+        if c.use_radial_residual or c.use_angular_residual:
+            residual = _shrinkage_residual(gray, c)
+
         blocks: list[np.ndarray] = []
         if c.use_nlf:
             blocks.append(_nlf_features(gray, c))
         if c.use_cfa:
             blocks.append(_cfa_features(rgb, c))
         if c.use_radial_residual:
-            blocks.append(_radial_residual_features(gray, c))
+            blocks.append(_radial_residual_features(residual, c))
+        if c.use_angular_residual:
+            blocks.append(_angular_residual_features(residual, c))
         if c.use_lca:
             blocks.append(_lca_features(rgb, c))
         return np.concatenate(blocks).astype(np.float32)

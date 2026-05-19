@@ -50,10 +50,11 @@ spectral_forensic:
 lens_features:
   image_size: 256
 
-  # Block toggles -- turn any of the four off if you want to ablate.
+  # Block toggles -- turn any of the five off if you want to ablate.
   use_nlf: true
   use_cfa: true
   use_radial_residual: true
+  use_angular_residual: true
   use_lca: true
 
   # NLF (Noise-Level Function): per-patch (mean, std) -> binned curve + fit
@@ -74,6 +75,13 @@ lens_features:
   res_wavelet_levels: 2
   res_wavelet_lambda: 3.0
   res_n_radial_bins: 64
+
+  # Angular spectrum: same FFT magnitude binned by orientation in a mid-freq
+  # annulus. 16 bins -> 11.25 deg resolution; should discriminate HMAR vs VAR
+  # (and other within-family confusions) where the radial profile cannot.
+  ang_n_bins: 16
+  ang_r_min_frac: 0.25
+  ang_r_max_frac: 0.75
 
   # Lateral Chromatic Aberration: per-tile sub-pixel shift -> radial fit
   lca_tiles: 4
