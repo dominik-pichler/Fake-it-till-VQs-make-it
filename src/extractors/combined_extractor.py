@@ -15,8 +15,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from spectral_extractor import FeatureConfig, SpectralFeatureExtractor
-from multi_encoder_extractor import MultiEncoderConfig, MultiEncoderExtractor
+from .spectral_extractor import FeatureConfig, SpectralFeatureExtractor
+from .multi_encoder_extractor import MultiEncoderConfig, MultiEncoderExtractor
 
 
 class CombinedFeatureExtractor:

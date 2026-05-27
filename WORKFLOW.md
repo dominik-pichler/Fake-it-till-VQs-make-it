@@ -177,14 +177,19 @@ Residual r
 
 | # | Name | Method | What it captures | Status |
 |---|------|--------|------------------|--------|
-| 1 | **RGB** | Raw pixel values | Color-channel artifacts, local glitches | Implemented |
-| 2 | **DCT** | Discrete Cosine Transform per channel | Frequency energy distribution | Implemented |
-| 3 | **QFT** | FFT on grayscale, low-freq only | Broad structural patterns | Implemented |
-| 4 | **SL** | ResNet101 encoder (ImageNet) | Local texture patterns (supervised) | Not yet |
-| 5 | **VSL** | ViT class-token features | Global structure via attention (supervised) | Not yet |
-| 6 | **SSL** | DINO ResNet50 encoder | General visual structure (self-supervised) | Not yet |
+| 1 | **RGB** | Raw pixel values | Color-channel artifacts, local glitches | Implemented (`spectral`) |
+| 2 | **DCT** | Discrete Cosine Transform per channel | Frequency energy distribution | Implemented (`spectral`) |
+| 3 | **QFT** | FFT on grayscale, low-freq only | Broad structural patterns | Implemented (`spectral`) |
+| 4 | **SL** | ResNet101 encoder (ImageNet) | Local texture patterns (supervised) | Implemented (`multi_encoder`) |
+| 5 | **VSL** | ViT-B/16 class-token features | Global structure via attention (supervised) | Implemented (`multi_encoder`) |
+| 6 | **SSL** | DINO ResNet50 encoder | General visual structure (self-supervised) | Implemented (`multi_encoder`) |
 
-> **Note:** The paper fuses all 6 lenses with learned weights to create the final causal fingerprint. Currently, only the signal-level lenses (RGB, DCT, QFT) are implemented for Stage 1 classification.
+> The paper fuses all 6 lenses with learned weights to create the final causal
+> fingerprint. In this repo, signal-level lenses live in `extractors/spectral_extractor.py`
+> and the semantic-level lenses live in `extractors/multi_encoder_extractor.py`;
+> the `combined` extractor concatenates both. Two additional extractors —
+> `forensic` (SRM/wavelet/LBP) and `lens_features` (NLF/CFA/radial/angular/LCA) —
+> add forensic and lens-based signals beyond the original 6-lens design.
 
 ![CF Architecture](imgs/CF_Architecture.png)
 
@@ -226,7 +231,7 @@ Residual r
 
 ```
 
-┌─────────────────────────────────────┐
+                    ┌─────────────────────────────────────┐
                     │         INPUT IMAGE (.png)          │
                     └──────────────────┬──────────────────┘
                                        │
@@ -285,25 +290,33 @@ Residual r
 
 ---
 
-## 6. Current Implementation (Stage 1)
+## 6. Current Implementation
 
-### Feature Extraction
+### Feature extractors
 
 The fingerprint `F` must be decoupled from image content `C` and style `S`.
+Selection happens via `extractor:` in `src/extractor_config.yaml`:
 
-**Current approach:** FFT-bin determination on normalized, grayscale images.
+| Key                       | Lenses / signals                                                              |
+|---------------------------|-------------------------------------------------------------------------------|
+| `spectral`                | RGB / DCT / QFT on a high-pass residual                                       |
+| `forensic`                | SRM moments, Haar wavelet sub-bands, LBP histograms                           |
+| `lens_features`           | NLF, CFA peaks, radial + angular residual spectrum, LCA                       |
+| `multi_encoder`           | ResNet101 (SL), ViT-B/16 (VSL), DINO ResNet50 (SSL); `lightweight` collapses to ResNet18 |
+| `spectral_forensic`       | `spectral` ⊕ `forensic`                                                       |
+| `spectral_forensic_lens`  | `spectral` ⊕ `forensic` ⊕ `lens_features`                                     |
+| `combined`                | `spectral` ⊕ `multi_encoder` (signal + semantic)                              |
 
-**Extracted patterns:**
-- Spectral peaks
-- Radial spectrum profile
-- Residual statistics
-- Color statistics
+### Residual methods
 
-### Implemented Lenses
+Lens extractors first compute a residual `r = x − denoise(x)` to suppress
+content. Selection via `residual_method:` (and analogous keys in
+`lens_features`):
 
-1. **RGB Lens** - Pixel-domain statistics on high-pass residual
-2. **DCT Lens** - 2D Discrete Cosine Transform per channel
-3. **QFT Lens** - Grayscale FFT, low-frequency band
+- `gaussian` — `x − Gaussian(x)`. Cheap, leaky.
+- `median` — `x − Median(x)`. Edge-preserving.
+- `multi_gaussian` — average of Gaussian residuals at multiple σ.
+- `wavelet` — Haar wavelet shrinkage. Closest in spirit to classical PRNU work.
 
 ### Classifiers
 
@@ -311,4 +324,5 @@ The fingerprint `F` must be decoupled from image content `C` and style `S`.
 - Linear SVM (with probability calibration)
 - Histogram Gradient Boosting
 
-See `src/README.md` for usage instructions.
+See [README.md](README.md) for run instructions and
+[NOTES.md](NOTES.md) for experimental results.

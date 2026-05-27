@@ -57,19 +57,19 @@ def build_extractor(config: dict[str, Any] | Path | str | None = None):
     kind = config.get("extractor", "spectral")
 
     if kind == "spectral":
-        from spectral_extractor import FeatureConfig, SpectralFeatureExtractor
+        from extractors.spectral_extractor import FeatureConfig, SpectralFeatureExtractor
         section = config.get("spectral") or {}
         return SpectralFeatureExtractor(FeatureConfig(**section))
 
     if kind == "forensic":
-        from forensic_extractor import ForensicConfig, ForensicFeatureExtractor
+        from extractors.forensic_extractor import ForensicConfig, ForensicFeatureExtractor
         section = config.get("forensic") or {}
         return ForensicFeatureExtractor(ForensicConfig(**section))
 
     if kind == "spectral_forensic":
-        from spectral_extractor import FeatureConfig
-        from forensic_extractor import ForensicConfig
-        from spectral_forensic_extractor import SpectralForensicExtractor
+        from extractors.spectral_extractor import FeatureConfig
+        from extractors.forensic_extractor import ForensicConfig
+        from extractors.spectral_forensic_extractor import SpectralForensicExtractor
         section = config.get("spectral_forensic") or {}
         spec_kwargs = section.get("spectral") or {}
         forn_kwargs = section.get("forensic") or {}
@@ -79,17 +79,17 @@ def build_extractor(config: dict[str, Any] | Path | str | None = None):
         )
 
     if kind == "lens_features":
-        from lens_features_extractor import (
+        from extractors.lens_features_extractor import (
             LensFeaturesConfig, LensFeaturesExtractor,
         )
         section = config.get("lens_features") or {}
         return LensFeaturesExtractor(LensFeaturesConfig(**section))
 
     if kind == "spectral_forensic_lens":
-        from spectral_extractor import FeatureConfig
-        from forensic_extractor import ForensicConfig
-        from lens_features_extractor import LensFeaturesConfig
-        from spectral_forensic_lens_extractor import (
+        from extractors.spectral_extractor import FeatureConfig
+        from extractors.forensic_extractor import ForensicConfig
+        from extractors.lens_features_extractor import LensFeaturesConfig
+        from extractors.spectral_forensic_lens_extractor import (
             SpectralForensicLensExtractor,
         )
         section = config.get("spectral_forensic_lens") or {}
@@ -103,15 +103,15 @@ def build_extractor(config: dict[str, Any] | Path | str | None = None):
         )
 
     if kind == "multi_encoder":
-        from multi_encoder_extractor import MultiEncoderConfig, MultiEncoderExtractor
+        from extractors.multi_encoder_extractor import MultiEncoderConfig, MultiEncoderExtractor
         section = dict(config.get("multi_encoder") or {})
         device = section.pop("device", "cpu")
         return MultiEncoderExtractor(MultiEncoderConfig(**section), device=device)
 
     if kind == "combined":
-        from spectral_extractor import FeatureConfig
-        from multi_encoder_extractor import MultiEncoderConfig
-        from combined_extractor import CombinedFeatureExtractor
+        from extractors.spectral_extractor import FeatureConfig
+        from extractors.multi_encoder_extractor import MultiEncoderConfig
+        from extractors.combined_extractor import CombinedFeatureExtractor
         section = config.get("combined") or {}
         device = section.get("device", "cpu")
         spec_kwargs = section.get("spectral") or {}

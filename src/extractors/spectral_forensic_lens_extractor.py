@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from spectral_extractor import FeatureConfig, SpectralFeatureExtractor
-from forensic_extractor import ForensicConfig, ForensicFeatureExtractor
-from lens_features_extractor import LensFeaturesConfig, LensFeaturesExtractor
+from .spectral_extractor import FeatureConfig, SpectralFeatureExtractor
+from .forensic_extractor import ForensicConfig, ForensicFeatureExtractor
+from .lens_features_extractor import LensFeaturesConfig, LensFeaturesExtractor
 
 
 class SpectralForensicLensExtractor:

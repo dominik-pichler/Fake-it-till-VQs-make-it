@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from spectral_extractor import FeatureConfig, SpectralFeatureExtractor
-from forensic_extractor import ForensicConfig, ForensicFeatureExtractor
+from .spectral_extractor import FeatureConfig, SpectralFeatureExtractor
+from .forensic_extractor import ForensicConfig, ForensicFeatureExtractor
 
 
 class SpectralForensicExtractor:

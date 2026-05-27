@@ -76,3 +76,17 @@ models/
 # OS files
 .DS_Store
 Thumbs.db
+
+# LaTeX build artifacts
+tex/build/
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.bbl
+*.blg
+*.nav
+*.snm

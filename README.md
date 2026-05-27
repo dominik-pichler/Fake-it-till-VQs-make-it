@@ -5,11 +5,11 @@
     ══════════════════════════════════════════════════════════════
 
       ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐
-      │ 📷  │    │🦙   │    │ 🎰  │    │ 🎲  │    │ 🤖  │
+      │ 📷  │    │ 🦙  │    │ 🎰  │    │ 🎲  │    │ 🤖  │
       │     │    │     │    │     │    │     │    │     │
       └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘
          │          │          │          │          │
-       Real     LlamaGen    VAR       HMAR        RAR
+       Real     LlamaGen     VAR        HMAR        RAR
 
                     🔍
                  ╔══════╗
@@ -19,33 +19,33 @@
     ══════════════════════════════════════════════════════════════
 ```
 
-Modern autoregressive image generators produce strikingly realistic images, but each model leaves behind subtle fingerprints in its output. This tool identifies which generator produced an image — or whether it's real.
+Modern autoregressive image generators produce strikingly realistic images, but
+each model leaves behind subtle fingerprints in its output. This repo provides a
+tool that identifies which generator produced a given image — or whether it's a
+real photograph.
 
-## Setup
+## Classes
 
-Images from 9 sources — 8 different autoregressive generators and real ImageNet photos. 
-The purpose of this repo is to provie a tool that to figure out which generative model made what.
+9 sources: 8 autoregressive generators and real ImageNet photos. All images are
+256×256 PNGs; train and test splits use disjoint ImageNet classes.
 
-| Label | Source |
-|-------|--------|
-| 0 | Real (ImageNet) |
-| 1 | HMAR-d20 |
-| 2 | HMAR-d30 |
-| 3 | LlamaGen-B |
-| 4 | LlamaGen-L |
-| 5 | VAR-d20 |
-| 6 | VAR-d30 |
-| 7 | RAR-L |
-| 8 | RAR-XXL |
+| Label | Source          |
+|-------|-----------------|
+| 0     | Real (ImageNet) |
+| 1     | HMAR-d20        |
+| 2     | HMAR-d30        |
+| 3     | LlamaGen-B      |
+| 4     | LlamaGen-L      |
+| 5     | VAR-d20         |
+| 6     | VAR-d30         |
+| 7     | RAR-L           |
+| 8     | RAR-XXL         |
 
-
-## Data
-
-All images are 256x256 PNGs. The train and test splits use different ImageNet classes.
+## Data layout
 
 ```
-data/
-├── train/          # 7,000 images per source (63,000 total)
+src/data/
+├── train/                       # 7,000 images per source (63,000 total)
 │   ├── real/
 │   ├── hmar_d20/
 │   ├── hmar_d30/
@@ -53,98 +53,149 @@ data/
 │   ├── llamagen_L_VQ-16/
 │   ├── nspvar_20/
 │   ├── nspvar_30/
-│   ├── rar_l/                      Paste
-│   └── rar_xxl/                    Select All
-├── val/            # 1,500 images                       al)
-│   └── (same structure as train)   How-to disable mouse
-└── test/           # 13,500 images, labels are hidden
+│   ├── rar_l/
+│   └── rar_xxl/
+├── val/                         # 1,500 images, same structure as train
+└── test/                        # 13,500 images, labels hidden
     ├── 00000.png
-    ├── ...
+    └── ...
 ```
 
-For local tests, a reduced set can be extracted via: 
+## Repo layout
+
+```
+wave_1/
+├── README.md         this file
+├── WORKFLOW.md       theory, architecture, lens design
+├── NOTES.md          experimental results, WIP, open questions
+├── CHANGELOG.md      version history
+├── tex/              LaTeX figures (build artifacts in tex/build/)
+├── imgs/             architecture diagrams referenced by WORKFLOW.md
+├── papers/           reference papers
+└── src/
+    ├── deep_fake_classifier_pipeline.py   train / extract / predict
+    ├── solution.py                         single-shot inference entry point
+    ├── extractor_factory.py                builds an extractor from YAML
+    ├── extractor_config.yaml               which extractor + its kwargs
+    ├── extractors/                         feature extractor modules
+    ├── data/  features/  models/           gitignored, generated
+    ├── pyproject.toml  uv.lock
+    └── .venv/
+```
+
+## Setup
 
 ```shell
-ssh -p 2222 <challenge>@<Server URL> 'for dir in /home/user/data/*/*/ /home/user/data/test/; do ls "$dir"*.png 2>/dev/null | head -50; done' | \
+cd src
+uv sync
 ```
 
+## How to run
 
+### Inference on a folder of images
 
-## How to deploy to remote ssh
+Use `solution.py` when you just want labels out of an existing trained model:
 
 ```shell
-scp -P 2222 /path/to/local/file <challenge>@<Server URL>:/path/on/server/
-
+uv run solution.py </path/to/pngs> --model ./<my_model.joblib>
 ```
 
-If you dont need to copy everything, you can use: 
+For the bundled pipeline:
+
+```shell
+uv run solution.py data/test/ --model models/best.joblib
+```
+
+It takes image paths and returns integer labels (0–8).
+
+### Full training pipeline
+
+`deep_fake_classifier_pipeline.py` handles feature extraction, training, and
+prediction in three subcommands:
+
+```shell
+# 1. Extract and cache features
+uv run python deep_fake_classifier_pipeline.py extract --data-root data --out features/
+
+# 2. Train classifiers (selects the best by CV)
+uv run python deep_fake_classifier_pipeline.py train --features features/ --out models/
+
+# 3. Generate predictions
+uv run python deep_fake_classifier_pipeline.py predict \
+    --features features/ --model models/best.joblib --out results.csv
+```
+
+### Python API
+
+```python
+from pathlib import Path
+from deep_fake_classifier_pipeline import classify_images, CLASS_NAMES
+
+paths = [Path("image1.png"), Path("image2.png")]
+labels = classify_images(paths)
+
+for path, label in zip(paths, labels):
+    print(f"{path.name}: {CLASS_NAMES[label]}")
+```
+
+## Configuring the feature extractor
+
+Which extractor runs is controlled by the top-level `extractor:` key in
+`src/extractor_config.yaml`. Available choices:
+
+| Key                       | What it does                                                                 |
+|---------------------------|------------------------------------------------------------------------------|
+| `spectral`                | RGB / DCT / QFT lenses on a high-pass residual (pure numpy)                  |
+| `forensic`                | SRM + Haar wavelet sub-band + LBP residual moments                           |
+| `lens_features`           | NLF, CFA periodicity, radial + angular residual spectrum, LCA               |
+| `multi_encoder`           | Frozen ResNet101 / ViT-B/16 / DINO-ResNet50 embeddings (semantic lenses)     |
+| `spectral_forensic`       | `spectral` ⊕ `forensic` concatenated                                          |
+| `spectral_forensic_lens`  | `spectral` ⊕ `forensic` ⊕ `lens_features` concatenated                        |
+| `combined`                | `spectral` ⊕ `multi_encoder` (signal + semantic)                              |
+
+See `src/extractor_config.yaml` for the kwargs each section accepts.
+
+### Residual methods
+
+The lens extractors first compute a residual `r = x − denoise(x)` to suppress
+image content. Four denoisers are available (`residual_method:`):
+
+- `gaussian` — `x − Gaussian(x)`. Cheap, leaky.
+- `median` — `x − Median(x)`. Edge-preserving.
+- `multi_gaussian` — average of Gaussian residuals at multiple σ.
+- `wavelet` — Haar wavelet shrinkage. Closest in spirit to classical PRNU work.
+
+## Deploying to the remote SSH host
+
+Copy a single file:
+
+```shell
+scp -P 2222 /path/to/local/file <challenge>@<server>:/path/on/server/
+```
+
+Sync the project but skip heavy generated directories:
+
 ```shell
 rsync -av -e "ssh -p 2222" \
   --exclude="features/" \
   --exclude="data/" \
   --exclude=".venv/" \
-  /path/to/local/test/project/src/ <challenge>@<Server URL>:/path/on/server/
+  /path/to/local/test/project/src/ <challenge>@<server>:/path/on/server/
 ```
 
-## How to use
+Pull a reduced local sample from the remote (50 images per source):
 
-If you are just interested in running the classifier, run: 
-`uv run solution.py </path/to/pngs> --model ./<my_model.joblib>`
+```shell
+ssh -p 2222 <challenge>@<server> \
+  'for dir in /home/user/data/*/*/ /home/user/data/test/; do
+     ls "$dir"*.png 2>/dev/null | head -50
+   done'
+```
 
-To run the standard pipeline:  
-`uv run solution.py data/test/ --model models/best.joblib`
+## Further reading
 
-Technical details can be found in the [Manual](src/README.md).
-
-
-It takes image paths, returns integer labels (0–8). You're free to use any approach — train a model in the container, train externally and upload weights, or try something else entirely.
-
-
----
-
-# Extractors
-
-# Residual Calculations
-Four methods are available; all are pure numpy + scipy:
-- gaussian:  $input - Gaussian(input)$ -> (cheap, leaky)
-- median:    $input - Median(input)$               (edge-preserving)
-- multi_gaussian:  $average \ of \ Gaussian  \ residuals \ at \ multiple \ sigmas$
-- wavelet:         $Haar \ wavelet \ shrinkage \ denoiser$; closest in spirit  to classical PRNU work
-
-# Next Steps: 
-Current State of implementation can be found in the [Changelog](CHANGELOG.md)
-
-- [ ] Residuals are currently ony determined by comparison to gaussian -> needs to be swaped with something else like DIRE (https://arxiv.org/abs/2303.09295)
-    - Different residual determination models are evaluated and documented in [the experiment](src/experiment.md)
-- [ ] Detecting Real images is apparently still very hard for the Classifiers -> maybe I can find some suitable metrics? 
-- [ ] Intra-Family Classifier is still not performing well - this needs to be improved 
-- [ ] Classifiers are currently only Logistic Regression, Linear SVM , HistGradientBoosting yet, using CNNs seem more promising
-      Could happen via: Encoder: maps 128-dim fingerprint → parameters (μ, σ) of a 64-dim Gaussian
-- [ ] ~~Currently only spectral Extractor is used - but does already deliver solid results in the familiy classfication. In the next step the encoder extractor + a combination of both should also be tested and evaluated~~
-- [ ] ~~Second Stage Classifier has only model type (Logistic Regression: end-to-end fine val acc (hard routing): 0.3763) -> This should be extended to three just as in step 1~~
-
-
-
-# Quality Log
-- **First run:** (Spectral Extractor, 3 Models ST1, 1 Model Head ST2) end-to-end fine val acc (hard routing): 0.3763
-- **Second run:** (Spectral Extractor, 3 Models ST1, 3 Model Head ST2) end-to-end fine val acc (hard routing): 0.3776 --> so my assumption here is that it's an feature issue not a model issue.
-- **Third run:** Tested the encoders but this is not a feasable solution due to the very very slow processing on the container (~ 6.5sec/Image) caused by multiple factors: 
-
-  - Issues with mkldnn -> hence 30x slower
-    
-  ```python
-      import torch
-      from torchvision.models import resnet101, ResNet101_Weights
-      m = resnet101(weights=ResNet101_Weights.IMAGENET1K_V2).eval()
-      x = torch.randn(1, 3, 256, 256)
-      with torch.no_grad():
-          y = m(x)
-      print('ok', y.shape)
-    ```
-  - CUDA not available: 
-    ```shell
-    python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.device_count())"
-    False 0
-    ``` 
-        
-  
+- [WORKFLOW.md](WORKFLOW.md) — theory: AR generation, causal fingerprints, the
+  6-lens design, two-stage classifier architecture.
+- [NOTES.md](NOTES.md) — experimental results, quality log, open questions.
+- [CHANGELOG.md](CHANGELOG.md) — version history.
+- `papers/` — reference papers (Causal Fingerprints, etc.).

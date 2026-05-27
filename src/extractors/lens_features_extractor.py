@@ -56,7 +56,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-from residual_methods import compute_residual_channel, VALID_METHODS
+from .residual_methods import compute_residual_channel, VALID_METHODS
 
 
 # ---------------------------------------------------------------------------
