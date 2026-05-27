@@ -27,8 +27,9 @@ Notes
 - Backbones are frozen (eval mode, requires_grad=False). Only the three
   projection heads and the three fusion weights are trainable.
 - Inputs are normalised to 256x256 to match the spectral pipeline. The
-  ResNets handle this size natively via global pooling; the ViT (timm
-  version) interpolates positional embeddings automatically.
+  ResNets handle this size natively via global pooling; the ViT runs at
+  its native 224x224 input (we resize 256 -> 224 inside the encoder so
+  the pipeline doesn't need to know).
 - ImageNet mean/std normalisation is applied inside the module so callers
   can pass raw [0, 1] images or PIL images directly.
 """
@@ -44,7 +45,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
-from torchvision.models import resnet101, ResNet101_Weights
+from torchvision.models import (
+    resnet101, ResNet101_Weights,
+    resnet18, ResNet18_Weights,
+    vit_b_16, ViT_B_16_Weights,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +64,11 @@ class MultiEncoderConfig:
     use_vsl: bool = True           # ViT-B/16 (ImageNet supervised)
     use_ssl: bool = True           # DINO ResNet50 (self-supervised)
     freeze_backbones: bool = True
+    # If True, replace the three-backbone stack with a single ResNet18.
+    # 11M params and ~20x faster than ResNet101+ViT+DINO on CPU; meant for
+    # boxes without a GPU. The use_sl/use_vsl/use_ssl flags are ignored
+    # when lightweight is set.
+    lightweight: bool = False
 
 
 # ImageNet statistics used by all three backbones.
@@ -87,34 +97,64 @@ class _ResNet101Encoder(nn.Module):
         return feat.flatten(1)           # (B, 2048)
 
 
+class _ResNet18Encoder(nn.Module):
+    """ResNet18 pre-trained on ImageNet, with the classification head removed.
+
+    Drop-in CPU-friendly replacement for the three-backbone stack. About
+    11M params vs. ResNet101's 45M, and the lighter residual blocks make
+    per-image latency ~20x smaller on CPU. Embedding dim is 512 (not 2048),
+    which happens to match MultiEncoderConfig.embed_dim's default -- no
+    information bottleneck at the projection head.
+    """
+
+    out_dim = 512
+
+    def __init__(self):
+        super().__init__()
+        weights = ResNet18_Weights.IMAGENET1K_V1
+        net = resnet18(weights=weights)
+        self.backbone = nn.Sequential(*list(net.children())[:-1])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat = self.backbone(x)          # (B, 512, 1, 1)
+        return feat.flatten(1)           # (B, 512)
+
+
 class _ViTEncoder(nn.Module):
     """
     ViT-Base/16 pre-trained on ImageNet, returning the class-token feature.
 
-    Uses timm so we get clean access to the CLS token and automatic
-    positional-embedding interpolation for non-224 inputs.
+    Uses torchvision's vit_b_16 to avoid a timm dependency. torchvision's
+    pretrained ViT is fixed at 224x224 (positional embeddings are not
+    interpolated automatically), so we resize the input down from whatever
+    the rest of the pipeline runs at to 224 before feeding the backbone.
+    We then read the CLS-token output by replacing the classification head
+    with an Identity.
     """
 
     out_dim = 768
+    _VIT_INPUT_SIZE = 224
 
     def __init__(self, image_size: int = 256):
         super().__init__()
-        try:
-            import timm
-        except ImportError as e:
-            raise ImportError(
-                "timm is required for the ViT encoder. Install with `pip install timm`."
-            ) from e
-        # num_classes=0 strips the classification head; the model then returns
-        # the pooled CLS-token feature directly from forward().
-        self.backbone = timm.create_model(
-            "vit_base_patch16_224",
-            pretrained=True,
-            num_classes=0,
-            img_size=image_size,         # tells timm to interpolate pos embeds
-        )
+        weights = ViT_B_16_Weights.IMAGENET1K_V1
+        net = vit_b_16(weights=weights)
+        # Replace the classification head so forward() returns the 768-dim
+        # CLS-token feature (torchvision's ViT applies head AFTER the
+        # encoder, and the head's input is the pooled CLS embedding).
+        net.heads = nn.Identity()
+        self.backbone = net
+        # Resize to the ViT's native input only if the upstream pipeline
+        # is at a different size. interpolate at forward time so we don't
+        # carry a torchvision Resize transform (which can't see grad).
+        self._needs_resize = image_size != self._VIT_INPUT_SIZE
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self._needs_resize:
+            x = F.interpolate(
+                x, size=(self._VIT_INPUT_SIZE, self._VIT_INPUT_SIZE),
+                mode="bicubic", align_corners=False, antialias=True,
+            )
         return self.backbone(x)          # (B, 768)
 
 
@@ -160,12 +200,17 @@ class MultiEncoderExtractor(nn.Module):
 
         # Build the active encoders.
         encoders: dict[str, nn.Module] = {}
-        if self.cfg.use_sl:
-            encoders["sl"] = _ResNet101Encoder()
-        if self.cfg.use_vsl:
-            encoders["vsl"] = _ViTEncoder(image_size=self.cfg.image_size)
-        if self.cfg.use_ssl:
-            encoders["ssl"] = _DinoResNet50Encoder()
+        if self.cfg.lightweight:
+            # CPU-only escape hatch: a single small backbone. Ignores
+            # use_sl/use_vsl/use_ssl on purpose.
+            encoders["rn18"] = _ResNet18Encoder()
+        else:
+            if self.cfg.use_sl:
+                encoders["sl"] = _ResNet101Encoder()
+            if self.cfg.use_vsl:
+                encoders["vsl"] = _ViTEncoder(image_size=self.cfg.image_size)
+            if self.cfg.use_ssl:
+                encoders["ssl"] = _DinoResNet50Encoder()
 
         if not encoders:
             raise ValueError("At least one encoder must be enabled.")
@@ -291,18 +336,47 @@ class MultiEncoderExtractor(nn.Module):
                 self.train()
         return out.cpu().numpy() if as_numpy else out.cpu()
 
+    # Flag the extract pipeline reads to choose the fast (batched) path.
+    prefers_batched_extract: bool = True
+
     @torch.no_grad()
     def extract_batch(
-        self, images: Sequence, as_numpy: bool = False
+        self, images: Sequence,
+        as_numpy: bool = False,
+        batch_size: int = 32,
+        show_progress: bool = False,
     ) -> Union[torch.Tensor, np.ndarray]:
-        """List of images -> (N, embed_dim) embeddings."""
+        """List of images -> (N, embed_dim) embeddings.
+
+        Processes images in chunks of `batch_size` so a single forward
+        through ResNet101 / ViT / DINO sees many images at once. On GPU
+        this is the difference between a 30-minute extraction and a
+        30-second one; on CPU it still cuts overhead by ~10x because
+        framework launch cost amortizes across the batch.
+
+        `batch_size` defaults to 32 -- safe for a single GPU with ~8 GB.
+        Lower it if you OOM, raise it if you have headroom.
+        """
         was_training = self.training
         self.eval()
         try:
-            tensors = [self._to_tensor(im) for im in images]
-            batch = torch.stack(tensors, dim=0)              # (N, 3, H, W)
-            out = self.forward(batch)                        # (N, embed_dim)
+            chunks: list[torch.Tensor] = []
+            ranges = range(0, len(images), batch_size)
+            if show_progress:
+                from tqdm import tqdm
+                ranges = tqdm(
+                    ranges,
+                    total=(len(images) + batch_size - 1) // batch_size,
+                    desc="multi_encoder", unit="batch", dynamic_ncols=True,
+                )
+            for i in ranges:
+                chunk = images[i:i + batch_size]
+                tensors = [self._to_tensor(im) for im in chunk]
+                batch = torch.stack(tensors, dim=0)          # (B, 3, H, W)
+                out = self.forward(batch)                    # (B, embed_dim)
+                chunks.append(out.cpu())
+            result = torch.cat(chunks, dim=0)
         finally:
             if was_training:
                 self.train()
-        return out.cpu().numpy() if as_numpy else out.cpu()
+        return result.numpy() if as_numpy else result

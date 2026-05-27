@@ -41,8 +41,14 @@ class ForensicConfig:
 
     # ---- SRM -------------------------------------------------------------
     use_srm: bool = True
-    # Residuals are truncated to [-T, +T] before stats. Standard SRM uses 2.
+    # Residuals are truncated to [-T, +T] after dividing by the per-kernel
+    # quantization step Q (see srm_features). Standard SRM uses T=2.
     srm_truncate: float = 2.0
+    # Quantization step Q. The classical SRM convention is Q = kernel L1 norm
+    # (so the unnormalized residual / Q lives on roughly the same integer
+    # scale across kernels). We round to int after division, matching the
+    # paper, before clipping at +-T.
+    srm_quantize: bool = True
 
     # ---- Wavelet ---------------------------------------------------------
     use_wavelet: bool = True
@@ -115,6 +121,14 @@ _SRM_KERNELS_NORM: dict[str, np.ndarray] = {
     name: _l1_normalised(k) for name, k in _SRM_KERNELS.items()
 }
 
+# Per-kernel quantization step Q = L1 norm of the unnormalized kernel. The
+# classical SRM residual is (unnormalized_kernel * channel) / Q, then rounded
+# and clipped to +-T. We precompute Q here so srm_features can convolve with
+# the unnormalized kernel and divide once.
+_SRM_KERNEL_Q: dict[str, float] = {
+    name: float(np.abs(k).sum()) for name, k in _SRM_KERNELS.items()
+}
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers (kept compatible with the spectral extractor's conventions)
@@ -158,21 +172,34 @@ _MOMENT_TAGS = ("mean", "std", "skew", "kurt", "energy")
 # Lens 1: SRM
 # ---------------------------------------------------------------------------
 
-def srm_features(rgb: np.ndarray, truncate: float) -> np.ndarray:
+def srm_features(rgb: np.ndarray, truncate: float,
+                 quantize: bool = True) -> np.ndarray:
     """Per-channel SRM residuals; truncated; reduced to moment stats.
 
-    Returns 3 channels x N filters x 5 stats features.
+    Classical SRM definition (Fridrich & Kodovsky 2012):
+        r = round( (unnormalized_kernel * channel) / Q )
+        r = clip(r, -T, +T)
+    where Q is the L1 norm of the unnormalized kernel and T = truncate.
 
-    Uses scipy.ndimage.convolve (compiled C path) instead of
-    scipy.signal.convolve2d, which is 5-15x faster on small kernels and
-    is what dominates per-image runtime if you switch back.
+    The previous version L1-normalized the kernel BEFORE convolution and
+    clipped at +-2; since channel in [0, 1] and ||k||_1 = 1, that residual
+    was bounded by 1, so the clip never triggered and the truncation step
+    was a no-op. We now convolve with the unnormalized kernel, divide by Q,
+    optionally round, then clip -- so truncate=2 actually removes outliers.
+
+    Returns 3 channels x N filters x 5 stats features.
     """
     feats = []
     for c in range(3):
         channel = rgb[..., c].astype(np.float32, copy=False)
-        for kernel in _SRM_KERNELS_NORM.values():
-            residual = _ndi_convolve(channel, kernel, mode="reflect")
-            residual = np.clip(residual, -truncate, truncate, out=residual)
+        # Scale to 0..255 so the integer residual scale matches the SRM paper.
+        channel_q = channel * 255.0
+        for name, kernel_unnorm in _SRM_KERNELS.items():
+            Q = _SRM_KERNEL_Q[name]
+            residual = _ndi_convolve(channel_q, kernel_unnorm, mode="reflect") / Q
+            if quantize:
+                np.rint(residual, out=residual)
+            np.clip(residual, -truncate, truncate, out=residual)
             feats.append(_moment_stats(residual))
     return np.concatenate(feats).astype(np.float32)
 
@@ -339,7 +366,7 @@ class ForensicFeatureExtractor:
 
         blocks: list[np.ndarray] = []
         if c.use_srm:
-            blocks.append(srm_features(rgb, c.srm_truncate))
+            blocks.append(srm_features(rgb, c.srm_truncate, c.srm_quantize))
         if c.use_wavelet:
             blocks.append(wavelet_features(gray, c.wavelet_levels))
         if c.use_lbp:

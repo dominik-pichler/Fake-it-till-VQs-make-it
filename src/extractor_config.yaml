@@ -1,8 +1,14 @@
 # Which feature extractor to use.
 # One of: spectral, forensic, spectral_forensic, lens_features,
 #         spectral_forensic_lens, multi_encoder, combined
-extractor: spectral_forensic_lens
-
+#
+# Recommendation: `combined` concatenates the hand-crafted spectral block
+# (palette / DCT / QFT, all the cheap real-vs-AI signal) with three frozen
+# ImageNet/DINO backbones. The deep half is what gives the model any hope
+# of separating depth/size variants within a family (d20 vs d30, B vs L,
+# L vs XXL) -- the spectral lenses see the *tokenizer* fingerprint, which
+# is identical inside a family, so they can't do that on their own.
+extractor: combined
 # --- Per-extractor settings ---
 # Only the section matching `extractor` above is consumed. Keys map
 # directly to FeatureConfig / MultiEncoderConfig fields; omit any key
@@ -10,14 +16,19 @@ extractor: spectral_forensic_lens
 
 spectral:
   image_size: 256
-  grid_sizes: [8, 10, 13, 16]
+  # Grid sizes the DCT/QFT lenses look for peaks at. LlamaGen + RAR use
+  # VQ-16 (16 px tokens); VAR and HMAR use multi-scale token grids that on
+  # 256 px images decompose into powers of two (16/8/4/...). The old [10, 13]
+  # values searched for peaks no decoder actually produces and added noise
+  # dimensions; we keep only the resolutions the listed models really use.
+  grid_sizes: [16, 8, 4]
   peak_bin_radius: 1
   n_radial_bins: 32
   qft_low_freq_fraction: 0.25
 
   # Residual method (how content is suppressed before lens analysis).
   # One of: gaussian | median | multi_gaussian | wavelet
-  residual_method: gaussian
+  residual_method: wavelet
   residual_sigma: 1.0                 # used by 'gaussian'
   residual_sigmas: [0.5, 1.0, 2.0]    # used by 'multi_gaussian'
   residual_median_size: 3             # used by 'median'
@@ -97,15 +108,23 @@ spectral_forensic_lens:
 multi_encoder:
   image_size: 256
   embed_dim: 512
+  # When lightweight is true, the three flags below are ignored and the
+  # extractor uses a single ResNet18 (~11M params, ~20x faster than the
+  # full stack on CPU). Flip to false only if you have a GPU.
+  lightweight: true
   use_sl: true            # ResNet101 (ImageNet supervised)
   use_vsl: true           # ViT-B/16 (ImageNet supervised)
-  use_ssl: true           # DINO ResNet50 (self-supervised)
+  use_ssl: true           # DINO ResNet50 (self-supervised). Set false if
+                          # the server can't reach github.com (torch.hub).
   freeze_backbones: true
   device: cpu             # cpu | cuda | cuda:0 | ...
 
 combined:
   device: cpu
-  # Override individual spectral / multi_encoder fields here if needed;
-  # leave the sub-blocks empty to use the dataclass defaults.
+  # Override individual spectral / multi_encoder fields here. The factory
+  # does NOT merge the top-level `multi_encoder:` block into this section,
+  # so any deep-encoder setting that matters for `combined` must be set
+  # under combined.multi_encoder explicitly.
   spectral: {}
-  multi_encoder: {}
+  multi_encoder:
+    lightweight: true     # single ResNet18 instead of the three-backbone stack

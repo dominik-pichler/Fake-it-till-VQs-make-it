@@ -276,11 +276,8 @@ def rgb_lens_features(residual_rgb: np.ndarray) -> np.ndarray:
       - 3 channel means + 3 channel stds (overall colour bias of residual)
       - 1 palette ratio on the *original* RGB (unique-colour density at 5 bits/ch)
 
-    Total: 6 + 18 + 6 + 1 = 31 features.
-
-    Notes:
-      The palette ratio is computed below in extract() because it needs the
-      original (non-residual) RGB image. Here we only handle the residual.
+    Total: 6 + 18 + 6 = 30 features. The palette block is appended
+    separately by extract() since it operates on the original RGB.
     """
     gray_res = _to_gray(residual_rgb)
     blocks = [_moment_stats(gray_res)]
@@ -291,18 +288,84 @@ def rgb_lens_features(residual_rgb: np.ndarray) -> np.ndarray:
     return np.concatenate(blocks).astype(np.float32)
 
 
-def palette_ratio(rgb: np.ndarray) -> np.ndarray:
+_PALETTE_BITS: tuple[int, ...] = (4, 5, 6, 7)
+# Number of features emitted by palette_features (kept in sync with the
+# implementation and used by SpectralFeatureExtractor._populate_names).
+_PALETTE_N_FEATURES: int = len(_PALETTE_BITS) + 3 + 1
+
+
+def palette_features(rgb: np.ndarray) -> np.ndarray:
     """
-    Effective palette size on the *original* image: fraction of distinct
-    5-bit-per-channel colour buckets used. VQ tokenizers tend to produce
-    constrained colour distributions, so this should be smaller for AR
-    outputs than for real photos.
+    Effective-palette statistics on the original RGB image.
+
+    VQ tokenizers (LlamaGen / HMAR / VAR / RAR all decode through a VQ-VAE
+    codebook) produce constrained colour distributions: a finite codebook
+    means a finite palette, possibly biased toward a few dominant colours.
+    Real ImageNet photos sample colour continuously. A single unique-ratio
+    feature collapses this into one dimension; we expand it to a small
+    block so the classifier can pick up codebook size, dominance, and
+    per-channel entropy independently.
+
+    Features (eight total):
+      - unique_ratio at 4/5/6/7 bits per channel (4 dims)
+        Lower bit depths bucket more aggressively; the curve's *shape*
+        across bit depths separates "naturally rich but quantizable" real
+        images from "natively limited" VQ outputs.
+      - top-1 / top-10 / top-100 colour mass at 5 bits/ch (3 dims)
+        Fraction of pixels covered by the most common 1 / 10 / 100 colour
+        buckets. High top-K mass => dominant-colour distribution typical of
+        VQ decoders; low top-K mass => long-tail typical of photos.
+      - shannon entropy of the per-channel 5-bit histogram, averaged (1 dim)
+        Generators that under-use parts of the codebook show up as low
+        per-channel entropy even when their joint unique_ratio looks OK.
     """
     flat = rgb.reshape(-1, 3)
-    quantised = (flat * 31).astype(np.int32)
-    keys = (quantised[:, 0] << 10) | (quantised[:, 1] << 5) | quantised[:, 2]
-    unique_ratio = np.unique(keys).size / float(keys.size)
-    return np.asarray([unique_ratio], dtype=np.float32)
+    n_px = float(flat.shape[0])
+
+    # 1) Unique-ratio curve at several bit depths.
+    ratios = []
+    for bits in _PALETTE_BITS:
+        scale = (1 << bits) - 1
+        q = (flat * scale).astype(np.int32)
+        keys = (q[:, 0] * (scale + 1) + q[:, 1]) * (scale + 1) + q[:, 2]
+        ratios.append(np.unique(keys).size / n_px)
+
+    # 2) Top-K colour mass at 5 bits/ch (the canonical choice from the
+    # original palette_ratio). np.unique with return_counts is the cheapest
+    # way to get the colour histogram on 256x256 images.
+    q5 = (flat * 31).astype(np.int32)
+    keys5 = (q5[:, 0] << 10) | (q5[:, 1] << 5) | q5[:, 2]
+    _, counts = np.unique(keys5, return_counts=True)
+    counts_sorted = np.sort(counts)[::-1]
+    cumsum = np.cumsum(counts_sorted) / n_px
+    top1 = float(cumsum[0])
+    top10 = float(cumsum[min(9, len(cumsum) - 1)])
+    top100 = float(cumsum[min(99, len(cumsum) - 1)])
+
+    # 3) Mean per-channel 5-bit entropy. Catches generators that have many
+    # distinct colours overall but a peaky per-channel distribution.
+    entropies = []
+    for c in range(3):
+        h, _ = np.histogram(q5[:, c], bins=32, range=(0, 32))
+        p = h.astype(np.float64) / n_px
+        p = p[p > 0]
+        entropies.append(float(-(p * np.log2(p)).sum()))
+    entropy = float(np.mean(entropies))
+
+    return np.asarray(
+        ratios + [top1, top10, top100, entropy],
+        dtype=np.float32,
+    )
+
+
+# Backwards-compat shim: anything still calling palette_ratio gets the
+# original single-feature output computed from the new block.
+def palette_ratio(rgb: np.ndarray) -> np.ndarray:
+    """Deprecated. Use palette_features(); returns only the 5-bit ratio."""
+    flat = rgb.reshape(-1, 3)
+    q = (flat * 31).astype(np.int32)
+    keys = (q[:, 0] << 10) | (q[:, 1] << 5) | q[:, 2]
+    return np.asarray([np.unique(keys).size / float(keys.size)], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +566,13 @@ class SpectralFeatureExtractor:
                     self._names.append(f"rgb_{ch}_{tag}")
             for tag in ("r_mean", "g_mean", "b_mean", "r_std", "g_std", "b_std"):
                 self._names.append(f"rgb_resid_{tag}")
-            self._names.append("rgb_palette_ratio")
+            # Palette block: per-bit-depth unique ratios + top-K mass + entropy.
+            for bits in _PALETTE_BITS:
+                self._names.append(f"rgb_palette_ratio_b{bits}")
+            self._names.append("rgb_palette_top1")
+            self._names.append("rgb_palette_top10")
+            self._names.append("rgb_palette_top100")
+            self._names.append("rgb_palette_entropy")
 
         if c.use_dct_lens:
             for ch in ("r", "g", "b"):
@@ -544,7 +613,7 @@ class SpectralFeatureExtractor:
         blocks: list[np.ndarray] = []
         if c.use_rgb_lens:
             blocks.append(rgb_lens_features(residual))
-            blocks.append(palette_ratio(rgb))
+            blocks.append(palette_features(rgb))
         if c.use_dct_lens:
             blocks.append(
                 dct_lens_features(

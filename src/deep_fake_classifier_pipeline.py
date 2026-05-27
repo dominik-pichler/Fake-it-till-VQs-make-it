@@ -14,11 +14,14 @@ from joblib import Parallel, delayed, dump, load
 from tqdm import tqdm
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.feature_selection import SelectKBest, VarianceThreshold, f_classif
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
+from sklearn.utils.class_weight import compute_sample_weight
 
 from extractor_factory import build_extractor
 
@@ -178,7 +181,7 @@ def classify_images(
     features = classifier.extractor.extract_batch([str(p) for p in img_paths])
 
     if classifier.is_hierarchical:
-        predictions, _ = predict_fine_hard(classifier.model, features)
+        predictions, _, _ = predict_fine_soft(classifier.model, features)
     else:
         predictions = classifier.model.predict(features)
 
@@ -246,6 +249,7 @@ def extract_split(
     cache_path: Path,
     n_jobs: int = 1,
     log_every: int = 500,
+    deep_batch_size: int = 32,
 ) -> np.ndarray:
     """
     Extract features for a list of image paths. Caches to .npy file.
@@ -257,6 +261,12 @@ def extract_split(
                (spectral, forensic). Each worker re-imports the extractor's
                modules; safe because they're CPU-only and stateless.
         -1  -> use all available cores.
+
+    Fast path: if the extractor sets `prefers_batched_extract = True`
+    (multi_encoder, combined) we skip the per-image loop and call
+    `extract_batch(paths, batch_size=deep_batch_size, show_progress=True)`
+    directly. For these extractors the deep forward dominates runtime, and
+    batching it cuts a multi-hour CPU extraction down to minutes on GPU.
     """
     if cache_path.exists():
         cached = np.load(cache_path)
@@ -265,23 +275,39 @@ def extract_split(
             return cached
         print(f"  cache shape mismatch, recomputing: {cache_path}")
 
-    feats = np.empty((len(paths), extractor.n_features), dtype=np.float32)
     desc = f"  extracting {cache_path.stem}"
 
-    if n_jobs == 1:
-        for i, p in enumerate(tqdm(paths, desc=desc, unit="img",
-                                   dynamic_ncols=True)):
-            feats[i] = extractor.extract(str(p))
-    else:
-        # return_as='generator' lets us stream results into the preallocated
-        # buffer while keeping submission order, so tqdm reflects real progress.
-        parallel = Parallel(n_jobs=n_jobs, return_as="generator")
-        results = parallel(
-            delayed(_extract_one)(extractor, str(p)) for p in paths
+    # Fast batched path for torch-based extractors. n_jobs > 1 doesn't help
+    # here -- spawning workers each holding ResNet101 + ViT + DINO would
+    # OOM most boxes -- so we ignore n_jobs and run a single process with
+    # GPU-friendly chunked forwards instead.
+    if getattr(extractor, "prefers_batched_extract", False):
+        if n_jobs != 1:
+            print(f"  [info] extractor prefers batched extract; "
+                  f"ignoring n_jobs={n_jobs} and running single-process "
+                  f"with batch_size={deep_batch_size}")
+        path_strs = [str(p) for p in paths]
+        feats = extractor.extract_batch(
+            path_strs, batch_size=deep_batch_size, show_progress=True,
         )
-        for i, vec in enumerate(tqdm(results, desc=desc, unit="img",
-                                     dynamic_ncols=True, total=len(paths))):
-            feats[i] = vec
+        feats = np.asarray(feats, dtype=np.float32)
+    else:
+        feats = np.empty((len(paths), extractor.n_features), dtype=np.float32)
+        if n_jobs == 1:
+            for i, p in enumerate(tqdm(paths, desc=desc, unit="img",
+                                       dynamic_ncols=True)):
+                feats[i] = extractor.extract(str(p))
+        else:
+            # return_as='generator' lets us stream results into the
+            # preallocated buffer while keeping submission order, so tqdm
+            # reflects real progress.
+            parallel = Parallel(n_jobs=n_jobs, return_as="generator")
+            results = parallel(
+                delayed(_extract_one)(extractor, str(p)) for p in paths
+            )
+            for i, vec in enumerate(tqdm(results, desc=desc, unit="img",
+                                         dynamic_ncols=True, total=len(paths))):
+                feats[i] = vec
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(cache_path, feats)
@@ -320,7 +346,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
         print(f"  {len(paths)} images across {len(set(subs))} sub-sources")
 
         feats = extract_split(paths, extractor, out_dir / f"{split}_X.npy",
-                              n_jobs=args.n_jobs)
+                              n_jobs=args.n_jobs,
+                              deep_batch_size=args.batch_size)
         np.save(out_dir / f"{split}_y.npy", labels)  # fine labels
         (out_dir / f"{split}_paths.json").write_text(
             json.dumps([str(p) for p in paths])
@@ -333,7 +360,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
         paths = collect_test(test_dir)
         print(f"  {len(paths)} images")
         extract_split(paths, extractor, out_dir / "test_X.npy",
-                      n_jobs=args.n_jobs)
+                      n_jobs=args.n_jobs,
+                      deep_batch_size=args.batch_size)
         (out_dir / "test_paths.json").write_text(
             json.dumps([str(p) for p in paths])
         )
@@ -380,35 +408,71 @@ class _ElapsedBar:
                 self._bar.refresh()
 
 
-def build_classifiers(random_state: int = 0) -> dict[str, Pipeline]:
-    """All three candidates share a StandardScaler front-end."""
+# --- Feature-selection k for SelectKBest. Chosen as a soft cap on the
+# d-vs-n ratio: the spectral_forensic_lens extractor emits ~550 features,
+# but most are spectrum bins that are individually weak. Limiting to the
+# top 128 by ANOVA F-score keeps the strongest signals and reins in the
+# overfitting we saw at train_acc=1.0 / val_acc=0.5.
+_FS_K_DEFAULT = 128
+
+
+def _linear_front_end(k: int) -> list[tuple[str, object]]:
+    """Steps shared by linear classifiers: drop zero-variance feats, scale,
+    and trim to the top-k by ANOVA F-score before the final estimator.
+    """
+    return [
+        ("vt", VarianceThreshold(threshold=0.0)),
+        ("scaler", StandardScaler()),
+        ("kbest", SelectKBest(score_func=f_classif, k=k)),
+    ]
+
+
+def build_classifiers(
+    random_state: int = 0,
+    feature_select_k: int | str = _FS_K_DEFAULT,
+) -> dict[str, Pipeline]:
+    """Three candidate classifiers with feature selection + regularization.
+
+    `feature_select_k` is forwarded to SelectKBest. Use the string "all" to
+    keep every feature (useful for stage-2 heads where d may already be < k).
+    HGB is tree-based, so it skips the scaler and the SelectKBest -- trees
+    handle redundant/correlated features natively and benefit from seeing
+    everything.
+    """
     return {
+        # Tight C (0.1 instead of 1.0): with ~550 features and a few hundred
+        # samples per stage, near-unregularized logreg overfits to train
+        # accuracy 1.0. C=0.1 leaves enough capacity to separate the easy
+        # classes (Real / LlamaGen / RAR) while shrinking the depth/scale
+        # noise dimensions.
         "logreg": Pipeline([
-            ("scaler", StandardScaler()),
+            *_linear_front_end(feature_select_k),
             ("clf", LogisticRegression(
-                solver="newton-cholesky",
+                solver="lbfgs",
                 max_iter=2000,
                 class_weight="balanced",
-                C=1.0,
+                C=0.1,
                 tol=1e-3,
                 random_state=random_state,
             )),
         ]),
         "linear_svm": Pipeline([
-            ("scaler", StandardScaler()),
+            *_linear_front_end(feature_select_k),
             ("clf", CalibratedClassifierCV(
-                LinearSVC(C=1.0, class_weight="balanced", max_iter=5000,
+                LinearSVC(C=0.1, class_weight="balanced", max_iter=5000,
                           random_state=random_state),
                 cv=3,
             )),
         ]),
+        # HGB: drop the dead StandardScaler (trees are scale-invariant), add
+        # class_weight via sample_weight at fit time (handled in cmd_train),
+        # and cap max_depth so trees can't memorize each training point.
         "hgb": Pipeline([
-            ("scaler", StandardScaler(with_mean=False)),
             ("clf", HistGradientBoostingClassifier(
-                max_iter=400,
+                max_iter=300,
                 learning_rate=0.05,
-                max_depth=None,
-                l2_regularization=0.0,
+                max_depth=4,
+                l2_regularization=1.0,
                 random_state=random_state,
             )),
         ]),
@@ -418,10 +482,28 @@ def build_classifiers(random_state: int = 0) -> dict[str, Pipeline]:
 def build_stage2_candidates(random_state: int = 0) -> dict[str, Pipeline]:
     """Candidate heads for within-family disambiguation.
 
-    Mirrors build_classifiers() so each family can pick the head that fits
-    its (typically smaller, harder) subset best on val.
+    Stage 2 sees a much smaller training subset (~one family). SelectKBest
+    is capped at "all" so we don't accidentally drop below the natural
+    feature dim; the linear C / HGB depth regularization carries the load.
     """
-    return build_classifiers(random_state=random_state)
+    return build_classifiers(random_state=random_state, feature_select_k="all")
+
+
+def _fit_with_balanced_weights(name: str, pipe: Pipeline,
+                               X: np.ndarray, y: np.ndarray) -> None:
+    """Fit `pipe` on (X, y), forwarding balanced sample weights to HGB.
+
+    LogReg and LinearSVC already take class_weight="balanced" at construction
+    time, so they don't need a sample_weight. HGB has no class_weight kwarg,
+    so we compute the balanced weights here and route them via the pipeline's
+    `clf__sample_weight` parameter -- this fixes a real bug where stage-1
+    HGB was implicitly biased against the under-represented "Real" class.
+    """
+    if name == "hgb":
+        w = compute_sample_weight(class_weight="balanced", y=y)
+        pipe.fit(X, y, clf__sample_weight=w)
+    else:
+        pipe.fit(X, y)
 
 
 def evaluate(pipe: Pipeline, X: np.ndarray, y: np.ndarray,
@@ -500,12 +582,25 @@ def train_stage2_heads(
                 }
                 continue
 
+            # Stage-2 selection: pick the candidate with the highest mean
+            # stratified-CV accuracy on the family's TRAIN subset, not by
+            # raw val accuracy on a single fold of ~50 samples. With small
+            # n the previous "best on val" approach was effectively noise
+            # selection (95% CI around acc=0.5 with n=50 is +-0.14); k-fold
+            # CV averages the noise out.
             candidates = build_stage2_candidates(random_state=random_state)
             per_candidate: dict[str, dict] = {}
             best_name: str | None = None
             best_score: float = -1.0
             best_pipe: Pipeline | None = None
-            selection_basis = "val" if mask_va.sum() > 0 else "train"
+
+            # k=5 unless the smallest class can't support it -- in which case
+            # use whatever fold count the rarest class allows (>=2).
+            class_min = min(int((yf_tr == c).sum()) for c in present_in_train)
+            n_splits = max(2, min(5, class_min))
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True,
+                                 random_state=random_state)
+            selection_basis = f"cv{n_splits}"
 
             with tqdm(candidates.items(), desc=f"  {family_name} heads",
                       unit="model", total=len(candidates), leave=False,
@@ -513,17 +608,49 @@ def train_stage2_heads(
                 for cand_name, pipe in cand_bar:
                     cand_bar.set_description(f"  {family_name} [{cand_name}]")
                     t0 = time.time()
-                    with _ElapsedBar(f"fitting {family_name} [{cand_name}]"):
-                        pipe.fit(Xf_tr, yf_tr)
+                    with _ElapsedBar(f"cv {family_name} [{cand_name}]"):
+                        # HGB needs balanced sample weights, but
+                        # cross_val_score can't route fit_params per-fold
+                        # robustly across sklearn versions -- so we do the
+                        # CV by hand for HGB, and use cross_val_score for
+                        # the linear heads (which already use class_weight).
+                        if cand_name == "hgb":
+                            scores: list[float] = []
+                            for tr_idx, va_idx in cv.split(Xf_tr, yf_tr):
+                                X_fold_tr, X_fold_va = Xf_tr[tr_idx], Xf_tr[va_idx]
+                                y_fold_tr, y_fold_va = yf_tr[tr_idx], yf_tr[va_idx]
+                                # Clone-light: rebuild the pipeline each fold
+                                # to avoid carrying state between folds.
+                                fold_pipe = build_stage2_candidates(
+                                    random_state=random_state
+                                )[cand_name]
+                                _fit_with_balanced_weights(
+                                    cand_name, fold_pipe, X_fold_tr, y_fold_tr,
+                                )
+                                scores.append(float(
+                                    (fold_pipe.predict(X_fold_va) == y_fold_va).mean()
+                                ))
+                            cv_score = float(np.mean(scores))
+                        else:
+                            cv_scores = cross_val_score(
+                                pipe, Xf_tr, yf_tr, cv=cv,
+                                scoring="accuracy", n_jobs=1,
+                            )
+                            cv_score = float(np.mean(cv_scores))
+                        # Refit the chosen pipeline on the full family
+                        # training set so we have something to deploy.
+                        _fit_with_balanced_weights(cand_name, pipe,
+                                                   Xf_tr, yf_tr)
                     fit_dt = time.time() - t0
 
                     tr_eval = evaluate(pipe, Xf_tr, yf_tr, FINE_NAMES)
                     va_eval = (evaluate(pipe, Xf_va, yf_va, FINE_NAMES)
                                if mask_va.sum() > 0 else None)
-                    score = va_eval["accuracy"] if va_eval else tr_eval["accuracy"]
-                    va_acc_str = f"{va_eval['accuracy']:.4f}" if va_eval else "n/a"
+                    va_acc_str = (f"{va_eval['accuracy']:.4f}"
+                                  if va_eval else "n/a")
 
-                    tqdm.write(f"    [{cand_name:10s}] fit: {fit_dt:.1f}s  "
+                    tqdm.write(f"    [{cand_name:10s}] fit+cv: {fit_dt:.1f}s  "
+                               f"{selection_basis} acc={cv_score:.4f}  "
                                f"train acc={tr_eval['accuracy']:.4f}  "
                                f"val acc={va_acc_str}")
                     if va_eval:
@@ -538,11 +665,12 @@ def train_stage2_heads(
 
                     per_candidate[cand_name] = {
                         "fit_seconds": fit_dt,
+                        "cv_score": cv_score,
                         "train": tr_eval,
                         "val": va_eval,
                     }
-                    if score > best_score:
-                        best_score = score
+                    if cv_score > best_score:
+                        best_score = cv_score
                         best_name = cand_name
                         best_pipe = pipe
 
@@ -617,6 +745,82 @@ def predict_fine_hard(
 
 
 # ---------------------------------------------------------------------------
+# Hierarchical inference (soft routing)
+# ---------------------------------------------------------------------------
+
+def predict_fine_soft(
+    bundle: dict, X: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Soft-routed hierarchical prediction.
+
+    Build a full 9-way distribution as
+        P(fine = f) = P(coarse = family(f)) * P(fine = f | coarse = family(f))
+    then argmax. This recovers samples that stage-1 would mis-route under
+    hard prediction whenever the stage-2 head for the true family assigns a
+    much higher within-family probability than the (low-confidence) wrong
+    family does. With well-calibrated stages, it strictly dominates hard
+    routing in fine accuracy.
+
+    Returns:
+        fine_pred:  (N,)        int64
+        coarse_pred:(N,)        int64    (argmax of stage-1 probs)
+        P_fine:     (N, 9)      float32  (the reconstructed distribution)
+    """
+    stage1: Pipeline = bundle["stage1"]
+    heads: dict[int, Pipeline] = bundle["stage2"]
+    coarse_to_fine: dict[int, list[int]] = bundle["coarse_to_fine"]
+    fine_names: list[str] = bundle["fine_names"]
+    coarse_names: list[str] = bundle["coarse_names"]
+
+    if not hasattr(stage1, "predict_proba"):
+        raise RuntimeError(
+            "Soft routing requires stage1 to expose predict_proba. "
+            "Use a calibrated classifier (LogReg/calibrated SVC/HGB)."
+        )
+
+    n_fine = len(fine_names)
+    n_coarse = len(coarse_names)
+    P_coarse = stage1.predict_proba(X).astype(np.float32)  # (N, n_coarse)
+
+    # Stage-1's classes may be a subset of all coarse indices (e.g. if the
+    # training set lacked one). Map predict_proba columns -> coarse index.
+    stage1_classes = np.asarray(stage1.classes_, dtype=np.int64)
+    coarse_col = {int(c): i for i, c in enumerate(stage1_classes)}
+
+    P_fine = np.zeros((len(X), n_fine), dtype=np.float32)
+    for coarse_idx, fine_members in coarse_to_fine.items():
+        if coarse_idx not in coarse_col:
+            # Stage-1 never saw this family -- contributes zero mass.
+            continue
+        p_c = P_coarse[:, coarse_col[coarse_idx]]
+        if len(fine_members) == 1:
+            P_fine[:, fine_members[0]] += p_c
+            continue
+        if coarse_idx not in heads:
+            # Head skipped at train time -- spread mass uniformly across the
+            # family so we don't bias toward any particular fine member.
+            share = p_c / float(len(fine_members))
+            for f in fine_members:
+                P_fine[:, f] += share
+            continue
+        head: Pipeline = heads[coarse_idx]
+        if hasattr(head, "predict_proba"):
+            P_within = head.predict_proba(X).astype(np.float32)  # (N, k)
+            head_classes = np.asarray(head.classes_, dtype=np.int64)
+            for i, fc in enumerate(head_classes):
+                P_fine[:, int(fc)] += p_c * P_within[:, i]
+        else:
+            # No probabilities -- fall back to hard prediction within family.
+            pred = head.predict(X).astype(np.int64)
+            for f in fine_members:
+                P_fine[pred == f, f] += p_c[pred == f]
+
+    fine_pred = P_fine.argmax(axis=1).astype(np.int64)
+    coarse_pred = stage1_classes[P_coarse.argmax(axis=1)].astype(np.int64)
+    return fine_pred, coarse_pred, P_fine
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: train
 # ---------------------------------------------------------------------------
 
@@ -651,7 +855,7 @@ def cmd_train(args: argparse.Namespace) -> None:
             tqdm.write(f"\n--- stage1 [{name}] ---")
             t0 = time.time()
             with _ElapsedBar(f"fitting stage1 [{name}]"):
-                pipe.fit(X_tr, y_coarse_tr)
+                _fit_with_balanced_weights(name, pipe, X_tr, y_coarse_tr)
             train_dt = time.time() - t0
 
             train_eval = evaluate(pipe, X_tr, y_coarse_tr, COARSE_NAMES)
@@ -687,7 +891,10 @@ def cmd_train(args: argparse.Namespace) -> None:
             X_tr, y_fine_tr, X_va, y_fine_va, random_state=args.seed,
         )
 
-        # ---- End-to-end evaluation on val with hard routing ----
+        # ---- End-to-end evaluation on val with soft routing ----
+        # Soft routing builds the full 9-way distribution as
+        # P(fine) = P(coarse) * P(fine | coarse) and argmaxes, which
+        # recovers samples that stage-1 would otherwise mis-route.
         bundle = {
             "stage1": best_pipe,
             "stage2": heads,
@@ -696,12 +903,17 @@ def cmd_train(args: argparse.Namespace) -> None:
             "fine_to_coarse": FINE_TO_COARSE,
             "coarse_to_fine": COARSE_TO_FINE,
         }
-        fine_pred_va, coarse_pred_va = predict_fine_hard(bundle, X_va)
+        fine_pred_va, coarse_pred_va, _ = predict_fine_soft(bundle, X_va)
         e2e_acc = float((fine_pred_va == y_fine_va).mean())
         e2e_eval = evaluate_predictions(
             y_fine_va, fine_pred_va, FINE_NAMES,
         )
-        print(f"\n>>> end-to-end fine val acc (hard routing): {e2e_acc:.4f}")
+        print(f"\n>>> end-to-end fine val acc (soft routing): {e2e_acc:.4f}")
+        # Also report the hard-routing number alongside so regressions are
+        # visible: if hard >> soft, stage-1 calibration is broken.
+        hard_fine_pred_va, _ = predict_fine_hard(bundle, X_va)
+        hard_e2e_acc = float((hard_fine_pred_va == y_fine_va).mean())
+        print(f"    (hard routing comparison: {hard_e2e_acc:.4f})")
         for cls, m in e2e_eval["report"].items():
             if cls in FINE_NAMES:
                 print(f"    {cls:12s} P={m['precision']:.3f} "
@@ -776,38 +988,16 @@ def cmd_predict(args: argparse.Namespace) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if is_hierarchical:
-        fine_pred, coarse_pred = predict_fine_hard(obj, test_X)
-        # With hard routing, full 9-way probabilities aren't well-defined.
-        # We emit stage-1 coarse probabilities + the within-family
-        # probabilities from whichever head handled each sample.
-        stage1: Pipeline = obj["stage1"]
-        P_coarse = (stage1.predict_proba(test_X)
-                    if hasattr(stage1, "predict_proba") else None)
+        # Soft routing: emit a full 9-way distribution per sample by
+        # combining stage-1's coarse probabilities with each stage-2 head's
+        # within-family probabilities. This is what's actually argmaxed to
+        # produce fine_pred, so the CSV's per-class probabilities are now
+        # internally consistent with the chosen label.
+        fine_pred, coarse_pred, P_fine = predict_fine_soft(obj, test_X)
 
         header = ["filename", "fine_label", "fine_name",
                   "coarse_label", "coarse_name"]
-        if P_coarse is not None:
-            header += [f"p_coarse_{c}" for c in COARSE_NAMES]
-        header += ["p_within_family"]  # prob assigned to the picked fine class
-
-        # Pre-compute within-family probability for the picked fine class
-        within_prob = np.full(len(test_X), 1.0, dtype=np.float32)
-        for coarse_idx, fine_members in obj["coarse_to_fine"].items():
-            mask = coarse_pred == coarse_idx
-            if not mask.any() or len(fine_members) < 2:
-                continue
-            if coarse_idx not in obj["stage2"]:
-                # Head was skipped at train time; we already wrote a
-                # fallback fine_pred in predict_fine_hard. No probability
-                # to report — leave within_prob at 1.0 sentinel.
-                continue
-            head: Pipeline = obj["stage2"][coarse_idx]
-            P_within = head.predict_proba(test_X[mask])  # (n, k)
-            # Map fine_pred[mask] to column in head.classes_
-            picked = fine_pred[mask]
-            col_lookup = {int(c): i for i, c in enumerate(head.classes_)}
-            cols = np.array([col_lookup[int(c)] for c in picked])
-            within_prob[mask] = P_within[np.arange(len(picked)), cols]
+        header += [f"p_{name}" for name in FINE_NAMES]
 
         with out_path.open("w") as f:
             f.write(",".join(header) + "\n")
@@ -816,9 +1006,7 @@ def cmd_predict(args: argparse.Namespace) -> None:
                 fi, ci = int(fine_pred[i]), int(coarse_pred[i])
                 row = [fname, str(fi), FINE_NAMES[fi],
                        str(ci), COARSE_NAMES[ci]]
-                if P_coarse is not None:
-                    row += [f"{P_coarse[i, k]:.6f}" for k in range(len(COARSE_NAMES))]
-                row += [f"{within_prob[i]:.6f}"]
+                row += [f"{P_fine[i, k]:.6f}" for k in range(len(FINE_NAMES))]
                 f.write(",".join(row) + "\n")
     else:
         # Legacy flat pipeline path -- unchanged behaviour
@@ -867,6 +1055,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "serial; -1 = all cores. Safe for numpy/scipy extractors "
                         "(spectral, forensic). Leave at 1 for multi_encoder "
                         "(torch models multiply memory per worker).")
+    e.add_argument("--batch-size", type=int, default=32,
+                   help="Batch size for the torch-based extractors "
+                        "(multi_encoder, combined). Larger = faster on GPU; "
+                        "lower if you OOM. Ignored by the pure-numpy extractors.")
     e.set_defaults(func=cmd_extract)
 
     t = sub.add_parser("train", help="Train all three stage-1 candidates, "

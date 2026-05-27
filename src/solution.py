@@ -55,42 +55,60 @@ def load_model(model_path: Path) -> Tuple[object, bool]:
 
 
 # ---------------------------------------------------------------------------
-# Hierarchical inference (hard routing)
+    # Hierarchical inference (soft routing)
 # ---------------------------------------------------------------------------
 
-def predict_fine_hard(bundle: dict, X: np.ndarray) -> np.ndarray:
-    """Stage-1 picks the family; the chosen stage-2 head picks the fine class.
+def predict_fine_soft(bundle: dict, X: np.ndarray) -> np.ndarray:
+    """Soft-routed hierarchical prediction.
 
-    For singleton families (Real), the fine prediction is deterministic.
-    If a stage-2 head was skipped at train time (degenerate data), falls
-    back to the family's first fine member so prediction still terminates.
+    Construct a 9-way distribution
+        P(fine = f) = P(coarse = family(f)) * P(fine = f | coarse = family(f))
+    and argmax. This recovers samples that stage-1 would otherwise mis-route
+    whenever the correct family's stage-2 head assigns a much higher
+    within-family probability than the wrong (low-confidence) family does.
+    Falls back to a hard prediction inside a family if its head does not
+    expose predict_proba.
     """
     stage1 = bundle["stage1"]
     heads = bundle["stage2"]
     coarse_to_fine = bundle["coarse_to_fine"]
+    n_fine = len(bundle["fine_names"])
 
-    coarse_pred = stage1.predict(X).astype(np.int64)
-    fine_pred = np.full(len(X), -1, dtype=np.int64)
-
-    for coarse_idx, fine_members in coarse_to_fine.items():
-        mask = coarse_pred == coarse_idx
-        if not mask.any():
-            continue
-        if len(fine_members) == 1:
-            fine_pred[mask] = fine_members[0]
-        elif coarse_idx in heads:
-            fine_pred[mask] = heads[coarse_idx].predict(X[mask]).astype(np.int64)
-        else:
-            # Head was skipped during training — fall back deterministically
-            fine_pred[mask] = fine_members[0]
-
-    if (fine_pred == -1).any():
-        unrouted = int((fine_pred == -1).sum())
+    if not hasattr(stage1, "predict_proba"):
         raise RuntimeError(
-            f"{unrouted} samples were not routed to any family. "
-            f"Stage-1 predicted a coarse class not in coarse_to_fine."
+            "Soft routing requires stage1 to expose predict_proba. "
+            "Use a calibrated classifier (LogReg/calibrated SVC/HGB)."
         )
-    return fine_pred
+
+    P_coarse = stage1.predict_proba(X).astype(np.float32)
+    stage1_classes = np.asarray(stage1.classes_, dtype=np.int64)
+    coarse_col = {int(c): i for i, c in enumerate(stage1_classes)}
+
+    P_fine = np.zeros((len(X), n_fine), dtype=np.float32)
+    for coarse_idx, fine_members in coarse_to_fine.items():
+        if coarse_idx not in coarse_col:
+            continue
+        p_c = P_coarse[:, coarse_col[coarse_idx]]
+        if len(fine_members) == 1:
+            P_fine[:, fine_members[0]] += p_c
+            continue
+        if coarse_idx not in heads:
+            share = p_c / float(len(fine_members))
+            for f in fine_members:
+                P_fine[:, f] += share
+            continue
+        head = heads[coarse_idx]
+        if hasattr(head, "predict_proba"):
+            P_within = head.predict_proba(X).astype(np.float32)
+            head_classes = np.asarray(head.classes_, dtype=np.int64)
+            for i, fc in enumerate(head_classes):
+                P_fine[:, int(fc)] += p_c * P_within[:, i]
+        else:
+            pred = head.predict(X).astype(np.int64)
+            for f in fine_members:
+                P_fine[pred == f, f] += p_c[pred == f]
+
+    return P_fine.argmax(axis=1).astype(np.int64)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +147,7 @@ def classify_images(img_paths: List[Path]) -> List[int]:
           file=sys.stderr)
 
     if is_hierarchical:
-        preds = predict_fine_hard(model, features)
+        preds = predict_fine_soft(model, features)
     else:
         preds = model.predict(features)
 

@@ -1,0 +1,207 @@
+% Compile with: pdflatex lenses_formulas.tex
+% One math card per lens — presentation-ready, screenshot directly into PPT.
+
+\documentclass[12pt]{article}
+\usepackage[a4paper, margin=18mm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins, breakable}
+\usepackage{parskip}
+\pagestyle{empty}
+
+\definecolor{nlf}{RGB}{240, 180, 100}
+\definecolor{cfa}{RGB}{120, 180, 110}
+\definecolor{res}{RGB}{100, 150, 220}
+\definecolor{lca}{RGB}{220, 120, 150}
+
+\newtcolorbox{lensbox}[2]{%
+  enhanced, breakable,
+  colback=#2!8, colframe=#2!80!black,
+  fonttitle=\bfseries\large,
+  title={#1},
+  arc=2mm, boxrule=0.6pt,
+  left=4mm, right=4mm, top=2mm, bottom=2mm,
+}
+
+\newcommand{\say}[1]{\par\smallskip\textit{\small \textcolor{black!60}{What to say:} #1}}
+
+\begin{document}
+
+\begin{center}
+{\Huge\bfseries Forensic lenses --- math cheat sheet}\\[1mm]
+{\small ADAIS / wave\_1 ~~~~ one slide per lens}
+\end{center}
+\bigskip
+
+% =========================================================================
+\begin{lensbox}{NLF --- Noise-Level Function}{nlf}
+
+For every $8{\times}8$ patch $p$ of the gray image, compute mean and std:
+\[
+\bar I_p \;=\; \frac{1}{64}\sum_{(i,j)\in p} I(i,j),
+\qquad
+\sigma_p \;=\; \sqrt{\frac{1}{64}\sum_{(i,j)\in p}\bigl(I(i,j)-\bar I_p\bigr)^{\!2}}.
+\]
+Throw away the most textured 50\% of patches (high local gradient).
+Bin the rest by $\bar I_p$ into 16 intensity bins; for each bin take the
+median $\sigma$. Fit the \textbf{Poisson--Gaussian sensor model}:
+\[
+\boxed{\;\sigma^{2}(I)\;=\;a\cdot I \;+\; b\;}
+\qquad
+R^{2} \;=\; 1 \;-\; \frac{\sum_i (\sigma_i^{2}-\hat\sigma_i^{2})^{2}}
+                          {\sum_i (\sigma_i^{2}-\overline{\sigma^{2}})^{2}}.
+\]
+\textbf{Output (20 values):} the 16 bin medians (the curve) plus
+$(a,\,b,\,R^{2},\,\text{valid\_frac})$.
+
+\say{Real cameras have \emph{shot noise} (Poisson) that grows with
+brightness, plus a constant \emph{read noise} (Gaussian). The line should
+fit. AI generators don't simulate sensor physics, so the curve is flat or
+noisy and $R^{2}$ is low.}
+\end{lensbox}
+
+\bigskip
+% =========================================================================
+\begin{lensbox}{CFA --- Colour-Filter-Array periodicity}{cfa}
+
+For each channel $c\in\{R,G,B\}$, take the high-pass residual
+(subtract a Gaussian blur with $\sigma{=}1$):
+\[
+r_c \;=\; c \;-\; G_{\sigma}\!\ast\, c.
+\]
+Take the 2-D FFT magnitude (shifted so DC is at the centre):
+\[
+S_c(\omega_y,\omega_x) \;=\; \bigl|\mathcal{F}\{r_c\}\bigr|.
+\]
+Sample three diagnostic peaks at the half-Nyquist frequencies and
+normalise by the mean spectrum so amplitude doesn't matter:
+\[
+\boxed{\;
+\tilde p_{c,k} \;=\;
+\frac{\max\limits_{\|(\omega_y,\omega_x)-q_k\|\le 2}\!\!S_c(\omega_y,\omega_x)}
+     {\overline{S_c}}\;},
+\quad
+q_k \in \Bigl\{\bigl(0,\tfrac{\pi}{2}\bigr),\bigl(\tfrac{\pi}{2},0\bigr),
+              \bigl(\tfrac{\pi}{2},\tfrac{\pi}{2}\bigr)\Bigr\}.
+\]
+\textbf{Output (12 values):} 3 channels $\times$ \{hh, vh, dh, pool\}.
+
+\say{Cameras only sense one colour per pixel (Bayer mosaic) and
+\emph{interpolate} the missing two from neighbours. That interpolation
+leaves a 2-pixel periodicity, which shows up as a spike at $\pi/2$ in
+the FFT. Generators emit RGB directly --- no spike.}
+\end{lensbox}
+
+\bigskip
+% =========================================================================
+\begin{lensbox}{RES (radial) --- residual spectrum, radial bins}{res}
+
+Take the denoising residual of the gray image
+$\;r = I - D_{\text{wavelet}}(I)$, then its FFT magnitude:
+\[
+S(\omega_y,\omega_x) \;=\; \bigl|\mathcal{F}\{r\}\bigr|,
+\qquad
+\rho(\omega_y,\omega_x) \;=\; \sqrt{(\omega_y-c_y)^{2}+(\omega_x-c_x)^{2}}.
+\]
+Define 64 \emph{log-spaced} radius bins
+$1 = \rho_0 < \rho_1 < \dots < \rho_{64} = N/2-1$. The feature for bin $k$
+is the mean spectrum on that ring, L1-normalised:
+\[
+\boxed{\;
+P_k \;=\; \frac{1}{|B_k|}\!\!\sum_{(\omega_y,\omega_x)\in B_k}\!\!
+            S(\omega_y,\omega_x)\;},
+\qquad
+\tilde P_k = \frac{P_k}{\sum_j P_j},
+\]
+\[
+B_k = \{(\omega_y,\omega_x):\rho_k\le \rho(\omega_y,\omega_x)<\rho_{k+1}\}.
+\]
+\textbf{Output:} 64 values --- the \emph{shape} of the radial spectrum.
+
+\say{Real photos have a smooth $1/f$ fall-off. GAN and diffusion
+\emph{upsamplers} leave periodic copies of the spectrum --- visible as
+bumps at specific radii. The radial profile is the cleanest way to spot
+them.}
+\end{lensbox}
+
+\clearpage
+% =========================================================================
+\begin{lensbox}{RES (angular) --- residual spectrum, angular bins}{res}
+
+Same residual $r$ and spectrum $S$ as above, but now bin by orientation
+inside a mid-frequency annulus:
+\[
+\theta(\omega_y,\omega_x) \;=\; \operatorname{atan2}(\omega_y-c_y,\;\omega_x-c_x)\;\bmod\;\pi
+\quad\text{(fold to }[0,\pi)\text{)}.
+\]
+Mask to the annulus $\mathcal{A} = \{0.25\,r_{\text{nyq}} \le \rho \le 0.75\,r_{\text{nyq}}\}$
+and bin into 16 sectors of $11.25^{\circ}$:
+\[
+\boxed{\;
+Q_k \;=\; \frac{1}{|\mathcal{A}_k|}\!\!\sum_{(\omega_y,\omega_x)\in\mathcal{A}_k}
+   \!\! S(\omega_y,\omega_x)\;},
+\qquad
+\tilde Q_k = \frac{Q_k}{\sum_j Q_j},
+\]
+\[
+\mathcal{A}_k = \mathcal{A}\,\cap\,\{\theta\in[\theta_k,\theta_{k+1})\}.
+\]
+\textbf{Output:} 16 values --- the orientation pattern of the residual.
+
+\say{A real photo is roughly \emph{isotropic} in the mid-frequencies ---
+all directions look the same. Each generator's upsampling kernel has a
+preferred axis (horizontal, vertical, $45^{\circ}$ lobes), so the angular
+profile is what tells \emph{LlamaGen vs.\ RAR vs.\ VAR} apart.}
+\end{lensbox}
+
+\bigskip
+% =========================================================================
+\begin{lensbox}{LCA --- Lateral Chromatic Aberration}{lca}
+
+Split the image into a $4{\times}4$ grid of tiles. For each tile, align
+the R and B channels to G by integer cross-correlation (within $\pm 3$ px):
+\[
+(\delta y,\delta x)^{*}
+\;=\;\operatorname*{argmax}_{|\delta y|,|\delta x|\le 3}
+\frac{\sum (c_{\,\delta}-\bar c)(G-\bar G)}{\|c_{\,\delta}-\bar c\|\,\|G-\bar G\|}
+\quad (\text{normalised cross-correlation}).
+\]
+Each tile centre has position $(y_t,x_t)$ relative to the image centre,
+distance $d_t=\sqrt{y_t^{2}+x_t^{2}}$, outward unit vector $\hat n_t$.
+Decompose the shift into radial / tangential components:
+\[
+\Delta_{\text{rad},t} \;=\; (\delta y,\delta x)\!\cdot\!\hat n_t,
+\qquad
+\Delta_{\text{tan},t} \;=\; (\delta y,\delta x)\!\cdot\!\hat n_t^{\perp}.
+\]
+Fit a line through the origin (LCA is zero at the optical centre):
+\[
+\boxed{\;
+\hat s \;=\; \frac{\sum_t \Delta_{\text{rad},t}\,d_t}{\sum_t d_t^{\,2}}\;},
+\qquad
+R^{2} \;=\; 1-\frac{\sum_t(\Delta_{\text{rad},t}-\hat s\, d_t)^{2}}
+                   {\sum_t(\Delta_{\text{rad},t}-\overline{\Delta_{\text{rad}}})^{2}}.
+\]
+\textbf{Output (8 values):} two pairs (R$\to$G, B$\to$G) $\times$
+$(\hat s,\, R^{2},\, \overline{|\Delta_{\text{tan}}|},\, \operatorname{std}(\Delta_{\text{rad}}))$.
+
+\say{Glass refracts red and blue light by different angles, so a real
+lens shifts the R and B channels outward from the optical centre, with
+the shift growing \emph{linearly} with distance. Real $\to$ high slope,
+high $R^{2}$, near-zero tangential. AI $\to$ random scatter, $R^{2}\!\approx\!0$.}
+\end{lensbox}
+
+\bigskip
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{\centering
+\textbf{The one-sentence summary for the audience:}\\[2pt]
+\itshape ``Every formula here measures something a real camera \emph{has}
+that a generative model \emph{doesn't simulate}: sensor noise statistics,
+demosaicing periodicity, upsampling-free spectrum, and lens-glass
+chromatic dispersion.''
+}}
+\end{center}
+
+\end{document}
